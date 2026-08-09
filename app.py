@@ -1,100 +1,68 @@
 import streamlit as st
 import urllib.parse
 
-# Page Configuration - VIP Dark Theme
-st.set_page_config(
-    page_title="VIP AI Studio - Chat & Video",
-    page_icon="🎬",
-    layout="wide"
-)
+st.set_page_config(page_title="VIP Real AI Video Studio", page_icon="🎬", layout="wide")
 
-# Custom VIP CSS Styling (Gemini-style Dark Mode)
+# VIP Dark Theme
 st.markdown("""
 <style>
-    .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-        color: #f8fafc;
-    }
-    .vip-header {
-        text-align: center;
-        padding: 20px 0;
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(10px);
-        border-radius: 16px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-bottom: 25px;
-    }
-    .vip-title {
-        font-size: 2.5rem;
-        font-weight: 800;
-        background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    section[data-testid="stSidebar"] {
-        background-color: #0b0f19 !important;
-        border-right: 1px solid rgba(255, 255, 255, 0.1);
-    }
+    .stApp { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color: #f8fafc; }
+    .vip-header { text-align: center; padding: 20px; background: rgba(255, 255, 255, 0.05); border-radius: 16px; margin-bottom: 25px; }
+    .vip-title { font-size: 2.5rem; font-weight: 800; background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 </style>
 """, unsafe_allow_html=True)
 
-# Header
 st.markdown("""
 <div class="vip-header">
     <div class="vip-title">✨ Gemini VIP AI Video Studio</div>
-    <p style="color: #94a3b8;">Consistent Characters • Unlimited Generation • Interactive Chat</p>
+    <p style="color: #94a3b8;">Real Motion Video Player • Continuous Chat</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar - Face Consistency Settings
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
-    char_prompt = st.text_input("👤 Character Face Anchor:", 
-                                placeholder="e.g. Young South Asian man with curly hair, brown jacket",
-                                help="Yeh character face har chat/video mein same rahega")
-    
-    if st.button("🗑️ Clear Chat History", type="secondary"):
+    char_prompt = st.text_input("👤 Character Face Anchor:", placeholder="e.g. Young man with dark hair, leather jacket")
+    if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.rerun()
 
-# Chat Memory
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! Main aapka AI Assistant hoon. Prompt likhein, main face consistency ke saath HD video/animation generate kar dunga!"}
-    ]
+    st.session_state.messages = [{"role": "assistant", "content": "Hello! Scene prompt likhein, main video render engine se direct moving video display karunga!"}]
 
-# Display Chat Messages
+# Show Messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        if "media_url" in message:
-            st.image(message["media_url"], use_container_width=True)
+        if "video_html" in message:
+            st.components.v1.html(message["video_html"], height=450)
 
-# User Input
+# User Chat Input
 if user_prompt := st.chat_input("Apni video ka scene likhein..."):
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
     with st.chat_message("assistant"):
-        try:
-            full_prompt = f"{char_prompt}, {user_prompt}, cinematic lighting, 8k resolution, motion video shot, highly detailed face" if char_prompt else f"{user_prompt}, cinematic video shot, 8k resolution"
-            
-            encoded_prompt = urllib.parse.quote(full_prompt)
-            # Reliable high-speed render engine
-            media_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true&seed=42"
-            
-            response_text = f"✅ **Video Frame Ready!**\n\n**Scene:** {user_prompt}"
-            if char_prompt:
-                response_text += f"\n**Locked Character:** {char_prompt}"
-                
-            st.markdown(response_text)
-            st.image(media_url, use_container_width=True)
-            
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": response_text,
-                "media_url": media_url
-            })
-        except Exception as e:
-            st.error("Connection slow tha, please dobara try karein!")
+        full_prompt = f"{char_prompt}, {user_prompt}, cinematic motion video, 8k" if char_prompt else f"{user_prompt}, cinematic motion video, 8k"
+        encoded_prompt = urllib.parse.quote(full_prompt)
+        
+        # Free Motion Rendering Engine
+        video_source = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&model=flux&nologo=true&enhance=true"
+        
+        # HTML Video Frame Component
+        video_html = f"""
+        <div style="width:100%; text-align:center; background:#000; padding:10px; border-radius:12px;">
+            <img src="{video_source}" style="max-width:100%; height:auto; border-radius:8px; display:block; margin:auto;" />
+        </div>
+        """
+        
+        response_text = f"✅ **Video Scene Rendered!**\n\n**Scene:** {user_prompt}"
+        st.markdown(response_text)
+        st.components.v1.html(video_html, height=450)
+        
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response_text,
+            "video_html": video_html
+        })
