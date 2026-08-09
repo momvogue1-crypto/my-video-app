@@ -1,12 +1,15 @@
 import streamlit as st
 import requests
 import base64
+import hashlib
+import secrets
+import urllib.parse
 import random
-import io
+import json
 
 # ============================================================
-# MISWAR'S CREATORS — AI IMAGE STUDIO
-# Pollinations Image-to-Image + High Resolution
+# MISWAR'S CREATORS
+# Pollinations BYOP + OAuth PKCE + Image Generation
 # ============================================================
 
 st.set_page_config(
@@ -17,7 +20,23 @@ st.set_page_config(
 )
 
 # ============================================================
-# CUSTOM CSS
+# CONFIG
+# ============================================================
+
+POLLINATIONS_AUTHORIZE_URL = (
+    "https://enter.pollinations.ai/authorize"
+)
+
+POLLINATIONS_TOKEN_URL = (
+    "https://enter.pollinations.ai/api/oauth/token"
+)
+
+POLLINATIONS_IMAGE_URL = (
+    "https://gen.pollinations.ai/v1/images/edits"
+)
+
+# ============================================================
+# CSS
 # ============================================================
 
 st.markdown("""
@@ -31,30 +50,30 @@ st.markdown("""
     font-size: 42px;
     font-weight: 800;
     text-align: center;
-    margin-bottom: 5px;
     color: #111111;
+    margin-bottom: 4px;
 }
 
 .subtitle {
     text-align: center;
     color: #666666;
-    font-size: 17px;
-    margin-bottom: 30px;
+    font-size: 16px;
+    margin-bottom: 28px;
+}
+
+.auth-box {
+    padding: 18px;
+    border-radius: 16px;
+    background: white;
+    border: 1px solid #dddddd;
+    margin-bottom: 18px;
 }
 
 div.stButton > button {
     width: 100%;
+    min-height: 48px;
     border-radius: 12px;
     font-weight: 700;
-    min-height: 48px;
-}
-
-.reference-box {
-    padding: 15px;
-    border-radius: 15px;
-    background: white;
-    border: 1px solid #dddddd;
-    margin-bottom: 15px;
 }
 
 </style>
@@ -70,7 +89,9 @@ st.markdown(
 )
 
 st.markdown(
-    '<div class="subtitle">AI Image Studio • Reference Image • High Resolution</div>',
+    '<div class="subtitle">'
+    'AI Image Studio • BYOP • Reference Images • HD Generation'
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -78,28 +99,297 @@ st.markdown(
 # SESSION STATE
 # ============================================================
 
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {
-            "role": "assistant",
-            "content":
-            "👋 Welcome to **Miswar's Creators**!\n\n"
-            "Upload reference images, write your prompt, choose a model and generate."
-        }
-    ]
-
-# ============================================================
-# IMAGE SIZE
-# ============================================================
-
-size_mapping = {
-    "16:9 — YouTube Thumbnail": (1920, 1080),
-    "9:16 — Shorts / Reels": (1080, 1920),
-    "1:1 — Square": (1536, 1536),
-    "4:5 — Instagram": (1080, 1350),
-    "3:4 — Vertical": (1080, 1440),
-    "4:5 — High Quality": (1536, 1920),
+defaults = {
+    "messages": [],
+    "access_token": None,
+    "oauth_state": None,
+    "pkce_verifier": None,
+    "auth_started": False,
 }
+
+for key, value in defaults.items():
+
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+# ============================================================
+# LOAD APP KEY
+# ============================================================
+
+try:
+
+    APP_KEY = st.secrets["POLLINATIONS_APP_KEY"]
+
+except Exception:
+
+    APP_KEY = ""
+
+
+# ============================================================
+# HELPER — BASE64URL
+# ============================================================
+
+def base64url_encode(data):
+
+    return base64.urlsafe_b64encode(
+        data
+    ).rstrip(b"=").decode("ascii")
+
+
+# ============================================================
+# PKCE
+# ============================================================
+
+def create_pkce():
+
+    verifier = base64url_encode(
+        secrets.token_bytes(32)
+    )
+
+    challenge = base64url_encode(
+        hashlib.sha256(
+            verifier.encode("ascii")
+        ).digest()
+    )
+
+    return verifier, challenge
+
+
+# ============================================================
+# CURRENT REDIRECT URI
+# ============================================================
+
+def get_redirect_uri():
+
+    try:
+
+        return st.context.url.split("?")[0]
+
+    except Exception:
+
+        return "http://localhost:8501"
+
+
+REDIRECT_URI = get_redirect_uri()
+
+
+# ============================================================
+# CREATE AUTH URL
+# ============================================================
+
+def create_auth_url():
+
+    verifier, challenge = create_pkce()
+
+    state = secrets.token_urlsafe(32)
+
+    st.session_state.pkce_verifier = verifier
+    st.session_state.oauth_state = state
+    st.session_state.auth_started = True
+
+    params = {
+
+        "response_type": "code",
+
+        "client_id": APP_KEY,
+
+        "redirect_uri": REDIRECT_URI,
+
+        "scope": "usage",
+
+        "state": state,
+
+        "code_challenge": challenge,
+
+        "code_challenge_method": "S256",
+
+        # User can approve a budget on Pollinations screen.
+        "budget": "5",
+
+        # User-authorized token lifetime.
+        "expiry": "7",
+    }
+
+    return (
+        POLLINATIONS_AUTHORIZE_URL
+        + "?"
+        + urllib.parse.urlencode(params)
+    )
+
+
+# ============================================================
+# HANDLE OAUTH CALLBACK
+# ============================================================
+
+def handle_oauth_callback():
+
+    params = st.query_params
+
+    code = params.get("code")
+    returned_state = params.get("state")
+    error = params.get("error")
+
+    if error:
+
+        st.error(
+            f"Pollinations authorization failed: {error}"
+        )
+
+        return
+
+    if not code:
+
+        return
+
+    # --------------------------------------------------------
+    # STATE CHECK
+    # --------------------------------------------------------
+
+    expected_state = st.session_state.get(
+        "oauth_state"
+    )
+
+    if not expected_state:
+
+        st.error(
+            "OAuth session expired. Please connect again."
+        )
+
+        return
+
+    if returned_state != expected_state:
+
+        st.error(
+            "Security check failed: invalid OAuth state."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # VERIFIER
+    # --------------------------------------------------------
+
+    verifier = st.session_state.get(
+        "pkce_verifier"
+    )
+
+    if not verifier:
+
+        st.error(
+            "PKCE session expired. Please connect again."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # TOKEN EXCHANGE
+    # --------------------------------------------------------
+
+    payload = {
+
+        "grant_type":
+            "authorization_code",
+
+        "code":
+            code,
+
+        "client_id":
+            APP_KEY,
+
+        "redirect_uri":
+            REDIRECT_URI,
+
+        "code_verifier":
+            verifier,
+    }
+
+    try:
+
+        response = requests.post(
+            POLLINATIONS_TOKEN_URL,
+            data=payload,
+            timeout=30
+        )
+
+        if response.status_code != 200:
+
+            try:
+                error_data = response.json()
+            except Exception:
+                error_data = response.text
+
+            st.error(
+                "Pollinations token exchange failed."
+            )
+
+            st.code(
+                str(error_data)
+            )
+
+            return
+
+        token_data = response.json()
+
+        access_token = token_data.get(
+            "access_token"
+        )
+
+        if not access_token:
+
+            st.error(
+                "No access token returned by Pollinations."
+            )
+
+            st.code(
+                json.dumps(
+                    token_data,
+                    indent=2
+                )
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # SAVE USER TOKEN IN SESSION ONLY
+        # ----------------------------------------------------
+
+        st.session_state.access_token = (
+            access_token
+        )
+
+        st.session_state.pkce_verifier = None
+        st.session_state.oauth_state = None
+        st.session_state.auth_started = False
+
+        # Remove OAuth query params.
+        st.query_params.clear()
+
+        st.success(
+            "✅ Pollinations connected successfully!"
+        )
+
+        st.rerun()
+
+    except Exception as e:
+
+        st.error(
+            "OAuth connection error."
+        )
+
+        st.code(
+            str(e)
+        )
+
+
+# ============================================================
+# HANDLE CALLBACK BEFORE UI
+# ============================================================
+
+if APP_KEY:
+
+    handle_oauth_callback()
+
 
 # ============================================================
 # SIDEBAR
@@ -109,114 +399,183 @@ with st.sidebar:
 
     st.title("⚙️ Studio Controls")
 
-    # --------------------------------------------------------
-    # API KEY
-    # --------------------------------------------------------
+    # ========================================================
+    # BYOP CONNECTION
+    # ========================================================
 
-    st.subheader("🔑 Pollinations API")
+    st.subheader("🔐 Pollinations BYOP")
 
-    api_key = st.text_input(
-        "Pollinations API Key",
-        type="password",
-        help="Use your Pollinations API key. Keep secret keys server-side."
-    )
+    if st.session_state.access_token:
 
-    st.caption(
-        "Your key is used only for the current Streamlit session."
-    )
+        st.success(
+            "🟢 Pollinations Connected"
+        )
+
+        st.caption(
+            "Generation will use the user's authorized "
+            "Pollinations balance."
+        )
+
+        if st.button(
+            "🔓 Disconnect",
+            use_container_width=True
+        ):
+
+            st.session_state.access_token = None
+
+            st.rerun()
+
+    else:
+
+        if not APP_KEY:
+
+            st.error(
+                "POLLINATIONS_APP_KEY is missing."
+            )
+
+            st.info(
+                "Add your pk_ App Key to "
+                ".streamlit/secrets.toml"
+            )
+
+        else:
+
+            auth_url = create_auth_url()
+
+            st.link_button(
+                "🔐 Connect Pollinations",
+                auth_url,
+                use_container_width=True
+            )
+
+            st.caption(
+                "Users authorize their own Pollen. "
+                "Your app does not use your personal API key."
+            )
 
     st.divider()
 
-    # --------------------------------------------------------
+    # ========================================================
     # REFERENCE IMAGES
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader("🖼️ Reference Images")
 
     uploaded_files = st.file_uploader(
-        "Upload reference images",
-        type=["jpg", "jpeg", "png", "webp"],
-        accept_multiple_files=True,
-        help="Upload up to 6 images."
+        "Upload up to 6 reference images",
+        type=[
+            "jpg",
+            "jpeg",
+            "png",
+            "webp"
+        ],
+        accept_multiple_files=True
     )
-
-    if uploaded_files and len(uploaded_files) > 6:
-        st.warning("Maximum 6 images allowed.")
-        uploaded_files = uploaded_files[:6]
 
     if uploaded_files:
 
+        if len(uploaded_files) > 6:
+
+            st.warning(
+                "Maximum 6 images allowed."
+            )
+
+            uploaded_files = uploaded_files[:6]
+
         st.success(
-            f"✅ {len(uploaded_files)} reference image(s) attached"
+            f"✅ {len(uploaded_files)} image(s) attached"
         )
 
         cols = st.columns(2)
 
-        for idx, file in enumerate(uploaded_files):
+        for index, file in enumerate(
+            uploaded_files
+        ):
 
-            with cols[idx % 2]:
+            with cols[index % 2]:
 
                 st.image(
                     file,
-                    caption=f"Reference {idx + 1}",
+                    caption=f"Reference {index + 1}",
                     use_container_width=True
                 )
 
     st.divider()
 
-    # --------------------------------------------------------
+    # ========================================================
     # MODEL
-    # --------------------------------------------------------
+    # ========================================================
 
-    st.subheader("🧠 Image Model")
+    st.subheader("🧠 AI Model")
 
     model = st.selectbox(
-        "Choose Model",
+        "Image Model",
         [
             "nanobanana-2",
+            "nanobanana",
             "nanobanana-pro",
             "seedream5",
             "gptimage-large",
+            "gpt-image-2",
             "kontext",
+            "p-image-edit",
             "flux"
         ],
         index=0
     )
 
-    st.caption(
-        "For reference-based generation, try Nano Banana 2, "
-        "Nano Banana Pro, Seedream 5 or Kontext first."
-    )
-
     st.divider()
 
-    # --------------------------------------------------------
-    # ASPECT RATIO
-    # --------------------------------------------------------
+    # ========================================================
+    # SIZE
+    # ========================================================
 
     st.subheader("📐 Image Size")
+
+    size_mapping = {
+
+        "16:9 — YouTube Thumbnail":
+            (1920, 1080),
+
+        "9:16 — Shorts / Reels":
+            (1080, 1920),
+
+        "1:1 — Square":
+            (1536, 1536),
+
+        "4:5 — Instagram":
+            (1080, 1350),
+
+        "3:4 — Vertical":
+            (1080, 1440),
+
+        "4:5 — High Quality":
+            (1536, 1920),
+    }
 
     aspect_ratio_label = st.selectbox(
         "Aspect Ratio",
         list(size_mapping.keys())
     )
 
-    width, height = size_mapping[aspect_ratio_label]
+    width, height = size_mapping[
+        aspect_ratio_label
+    ]
 
     st.caption(
-        f"Output: **{width} × {height} px**"
+        f"{width} × {height}px"
     )
 
     st.divider()
 
-    # --------------------------------------------------------
+    # ========================================================
     # QUALITY
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader("✨ Quality")
 
     quality = st.selectbox(
-        "Generation Quality",
+        "Quality",
         [
             "high",
             "medium",
@@ -225,18 +584,24 @@ with st.sidebar:
         index=0
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SEED
-    # --------------------------------------------------------
+    # ========================================================
 
-    use_random_seed = st.checkbox(
+    random_seed = st.checkbox(
         "🎲 Random Seed",
         value=True
     )
 
-    if use_random_seed:
-        seed = random.randint(1, 999999999)
+    if random_seed:
+
+        seed = random.randint(
+            1,
+            999999999
+        )
+
     else:
+
         seed = st.number_input(
             "Seed",
             min_value=1,
@@ -246,180 +611,159 @@ with st.sidebar:
 
     st.divider()
 
-    # --------------------------------------------------------
-    # CLEAR CHAT
-    # --------------------------------------------------------
+    # ========================================================
+    # CLEAR
+    # ========================================================
 
     if st.button(
         "🗑️ Clear Chat",
-        type="secondary",
         use_container_width=True
     ):
 
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content":
-                "👋 Chat cleared. Upload a reference and create something new!"
-            }
-        ]
+        st.session_state.messages = []
 
         st.rerun()
 
 
 # ============================================================
-# HELPER: FILE → DATA URL
-# ============================================================
-
-def file_to_data_url(uploaded_file):
-
-    file_bytes = uploaded_file.getvalue()
-
-    mime_type = uploaded_file.type or "image/png"
-
-    encoded = base64.b64encode(file_bytes).decode("utf-8")
-
-    return f"data:{mime_type};base64,{encoded}"
-
-
-# ============================================================
-# HELPER: GENERATE IMAGE
+# IMAGE GENERATION
 # ============================================================
 
 def generate_image(
     prompt,
-    api_key,
+    access_token,
     model,
     width,
     height,
     quality,
     seed,
-    uploaded_files
+    reference_images
 ):
 
-    endpoint = "https://gen.pollinations.ai/v1/images/edits"
-
     headers = {
-        "Authorization": f"Bearer {api_key}"
+
+        "Authorization":
+            f"Bearer {access_token}"
     }
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    # Multipart request sends the actual uploaded image.
-    # This is what your previous code was missing.
+    # STRONG REFERENCE PROMPT
     # --------------------------------------------------------
 
-    files = []
-
-    if uploaded_files:
-
-        for uploaded_file in uploaded_files:
-
-            files.append(
-                (
-                    "image",
-                    (
-                        uploaded_file.name,
-                        uploaded_file.getvalue(),
-                        uploaded_file.type or "image/png"
-                    )
-                )
-            )
-
-    # --------------------------------------------------------
-    # STRONG REFERENCE INSTRUCTIONS
-    # --------------------------------------------------------
-
-    if uploaded_files:
-
-        reference_instruction = """
-REFERENCE IMAGE INSTRUCTIONS:
-
-The uploaded image(s) are the primary visual reference.
-
-Carefully analyze the reference image(s) before generating.
-
-Preserve the important visual identity and design information from
-the reference image(s), especially:
-
-- clothing / dress design
-- garment structure
-- sleeve design
-- neckline
-- fabric appearance
-- color
-- color placement
-- patterns
-- embroidery
-- accessories
-- overall styling
-- proportions
-- pose when requested
-- important visual details
-
-Do NOT ignore the reference image.
-
-Do NOT replace the reference design with an unrelated design.
-
-If the user's prompt asks for a modification, modify the reference
-while keeping the requested reference characteristics recognizable.
-
-The final image must visibly correspond to the uploaded reference.
-"""
+    if reference_images:
 
         final_prompt = f"""
-{reference_instruction}
+Use the uploaded reference image(s) as the PRIMARY
+visual reference for this generation.
+
+IMPORTANT REFERENCE RULES:
+
+Study the reference image(s) carefully.
+
+Preserve the important visual characteristics from
+the reference whenever compatible with the user's request:
+
+• clothing design
+• dress structure
+• garment silhouette
+• neckline
+• sleeves
+• fabric appearance
+• exact or very similar colors
+• color placement
+• embroidery
+• patterns
+• accessories
+• styling
+• proportions
+• important visual details
+
+Do NOT ignore the reference.
+
+Do NOT create an unrelated design.
+
+If the user asks for a change, make that change while
+keeping the recognizable characteristics of the reference.
 
 USER REQUEST:
+
 {prompt}
 
-OUTPUT QUALITY:
-Professional commercial fashion photography,
-photorealistic,
-extremely detailed,
-sharp fabric texture,
-accurate garment construction,
-realistic skin,
-realistic lighting,
-high dynamic range,
-professional photography,
-clean composition,
-premium editorial quality.
+QUALITY:
 
-IMPORTANT:
-Follow the user's request first.
-Use the uploaded reference image as the visual source.
-Do not create a random unrelated image.
+Photorealistic premium fashion photography,
+high detail,
+sharp garment texture,
+realistic fabric,
+accurate construction,
+natural skin,
+professional studio lighting,
+cinematic but realistic lighting,
+premium editorial photography,
+clean composition,
+high dynamic range,
+commercial campaign quality.
 """
 
     else:
 
         final_prompt = f"""
-USER REQUEST:
 {prompt}
 
-Create a professional photorealistic image.
+Create a premium photorealistic image.
 
-Extremely detailed,
+High detail,
 sharp textures,
-realistic lighting,
-professional commercial photography,
-premium editorial quality,
+realistic materials,
+professional photography,
+natural lighting,
 clean composition,
-high dynamic range.
+high dynamic range,
+commercial quality.
 """
 
     # --------------------------------------------------------
-    # DATA
+    # MULTIPART IMAGES
+    # --------------------------------------------------------
+
+    files = []
+
+    for reference in reference_images:
+
+        files.append(
+            (
+                "image",
+                (
+                    reference.name,
+                    reference.getvalue(),
+                    reference.type or "image/png"
+                )
+            )
+        )
+
+    # --------------------------------------------------------
+    # FORM DATA
     # --------------------------------------------------------
 
     data = {
-        "model": model,
-        "prompt": final_prompt,
-        "width": str(width),
-        "height": str(height),
-        "quality": quality,
-        "seed": str(seed)
+
+        "model":
+            model,
+
+        "prompt":
+            final_prompt,
+
+        "width":
+            str(width),
+
+        "height":
+            str(height),
+
+        "quality":
+            quality,
+
+        "seed":
+            str(seed),
     }
 
     # --------------------------------------------------------
@@ -427,48 +771,60 @@ high dynamic range.
     # --------------------------------------------------------
 
     response = requests.post(
-        endpoint,
+
+        POLLINATIONS_IMAGE_URL,
+
         headers=headers,
+
         data=data,
+
         files=files if files else None,
+
         timeout=300
     )
 
     # --------------------------------------------------------
-    # ERROR HANDLING
+    # ERROR
     # --------------------------------------------------------
 
     if response.status_code != 200:
 
         try:
+
             error_data = response.json()
+
         except Exception:
+
             error_data = response.text
 
         raise RuntimeError(
-            f"Pollinations API Error {response.status_code}: "
+            f"Pollinations API "
+            f"{response.status_code}: "
             f"{error_data}"
         )
 
     # --------------------------------------------------------
-    # RESPONSE
+    # IMAGE RESPONSE
     # --------------------------------------------------------
 
-    content_type = response.headers.get(
-        "content-type",
-        ""
-    ).lower()
+    content_type = (
+        response.headers
+        .get("content-type", "")
+        .lower()
+    )
 
     if "image" in content_type:
 
         return response.content
 
-    # Some API responses may return JSON.
+    # --------------------------------------------------------
+    # JSON RESPONSE FALLBACK
+    # --------------------------------------------------------
+
     try:
 
         result = response.json()
 
-        # Common possibilities
         if "data" in result:
 
             first = result["data"][0]
@@ -491,7 +847,7 @@ high dynamic range.
                 return image_response.content
 
         raise RuntimeError(
-            f"Unexpected Pollinations response: {result}"
+            f"Unexpected response: {result}"
         )
 
     except ValueError:
@@ -502,14 +858,18 @@ high dynamic range.
 
 
 # ============================================================
-# DISPLAY OLD MESSAGES
+# CHAT HISTORY
 # ============================================================
 
 for message in st.session_state.messages:
 
-    with st.chat_message(message["role"]):
+    with st.chat_message(
+        message["role"]
+    ):
 
-        st.markdown(message["content"])
+        st.markdown(
+            message["content"]
+        )
 
         if message.get("image_bytes"):
 
@@ -529,19 +889,20 @@ user_prompt = st.chat_input(
 
 
 # ============================================================
-# GENERATION
+# GENERATE
 # ============================================================
 
 if user_prompt:
 
     # --------------------------------------------------------
-    # API KEY CHECK
+    # AUTH CHECK
     # --------------------------------------------------------
 
-    if not api_key:
+    if not st.session_state.access_token:
 
         st.error(
-            "⚠️ Please enter your Pollinations API key in the sidebar."
+            "🔐 Please connect Pollinations first "
+            "using the BYOP button in the sidebar."
         )
 
         st.stop()
@@ -558,7 +919,10 @@ if user_prompt:
     )
 
     with st.chat_message("user"):
-        st.markdown(user_prompt)
+
+        st.markdown(
+            user_prompt
+        )
 
     # --------------------------------------------------------
     # ASSISTANT
@@ -573,29 +937,39 @@ if user_prompt:
             if uploaded_files:
 
                 status.info(
-                    "🖼️ Reading reference image(s) and preparing "
-                    "image-to-image generation..."
+                    "🖼️ Sending reference image(s) "
+                    "to the image-edit model..."
                 )
 
             else:
 
                 status.info(
-                    "🎨 Preparing image generation..."
+                    "🎨 Preparing generation..."
                 )
 
             with st.spinner(
-                "🔥 Miswar's Creators is generating your image..."
+                "🔥 Miswar's Creators is rendering..."
             ):
 
                 image_bytes = generate_image(
+
                     prompt=user_prompt,
-                    api_key=api_key,
+
+                    access_token=
+                        st.session_state.access_token,
+
                     model=model,
+
                     width=width,
+
                     height=height,
+
                     quality=quality,
+
                     seed=seed,
-                    uploaded_files=uploaded_files
+
+                    reference_images=
+                        uploaded_files or []
                 )
 
             status.empty()
@@ -606,7 +980,10 @@ if user_prompt:
 
             st.image(
                 image_bytes,
-                caption=f"{model} • {width}×{height}",
+                caption=(
+                    f"{model} • "
+                    f"{width}×{height}"
+                ),
                 use_container_width=True
             )
 
@@ -615,10 +992,16 @@ if user_prompt:
             # ------------------------------------------------
 
             st.download_button(
-                label="⬇️ Download HD Image",
+
+                "⬇️ Download HD Image",
+
                 data=image_bytes,
-                file_name="miswars_creators_image.png",
+
+                file_name=
+                    "miswars_creators_image.png",
+
                 mime="image/png",
+
                 use_container_width=True
             )
 
@@ -626,7 +1009,7 @@ if user_prompt:
             # INFO
             # ------------------------------------------------
 
-            info_text = (
+            info = (
                 f"✨ **Generated Successfully**\n\n"
                 f"**Model:** `{model}`  \n"
                 f"**Size:** `{width} × {height}`  \n"
@@ -636,22 +1019,24 @@ if user_prompt:
 
             if uploaded_files:
 
-                info_text += (
+                info += (
                     f"  \n"
-                    f"**References:** `{len(uploaded_files)}`"
+                    f"**References:** "
+                    f"`{len(uploaded_files)}`"
                 )
 
-            st.markdown(info_text)
-
-            # ------------------------------------------------
-            # SAVE CHAT
-            # ------------------------------------------------
+            st.markdown(info)
 
             st.session_state.messages.append(
                 {
-                    "role": "assistant",
-                    "content": info_text,
-                    "image_bytes": image_bytes
+                    "role":
+                        "assistant",
+
+                    "content":
+                        info,
+
+                    "image_bytes":
+                        image_bytes
                 }
             )
 
@@ -660,14 +1045,9 @@ if user_prompt:
             status.empty()
 
             st.error(
-                "❌ Image generation failed."
+                "❌ Generation failed."
             )
 
             st.code(
                 str(e)
-            )
-
-            st.info(
-                "Check your Pollinations API key, selected model, "
-                "image format and API availability."
             )
