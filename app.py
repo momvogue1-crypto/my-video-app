@@ -1,15 +1,14 @@
 import streamlit as st
-import requests
-import base64
-import hashlib
-import secrets
-import urllib.parse
+from google import genai
+from google.genai import types
+from PIL import Image
+from io import BytesIO
 import random
-import json
+
 
 # ============================================================
 # MISWAR'S CREATORS
-# Pollinations BYOP + OAuth PKCE + Image Generation
+# Gemini Image Generation + Reference Images
 # ============================================================
 
 st.set_page_config(
@@ -19,24 +18,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ============================================================
-# CONFIG
-# ============================================================
-
-POLLINATIONS_AUTHORIZE_URL = (
-    "https://enter.pollinations.ai/authorize"
-)
-
-POLLINATIONS_TOKEN_URL = (
-    "https://enter.pollinations.ai/api/oauth/token"
-)
-
-POLLINATIONS_IMAGE_URL = (
-    "https://gen.pollinations.ai/v1/images/edits"
-)
 
 # ============================================================
-# CSS
+# CUSTOM CSS
 # ============================================================
 
 st.markdown("""
@@ -51,33 +35,26 @@ st.markdown("""
     font-weight: 800;
     text-align: center;
     color: #111111;
-    margin-bottom: 4px;
+    margin-bottom: 5px;
 }
 
 .subtitle {
     text-align: center;
     color: #666666;
-    font-size: 16px;
-    margin-bottom: 28px;
-}
-
-.auth-box {
-    padding: 18px;
-    border-radius: 16px;
-    background: white;
-    border: 1px solid #dddddd;
-    margin-bottom: 18px;
+    font-size: 17px;
+    margin-bottom: 30px;
 }
 
 div.stButton > button {
     width: 100%;
-    min-height: 48px;
     border-radius: 12px;
+    min-height: 48px;
     font-weight: 700;
 }
 
 </style>
 """, unsafe_allow_html=True)
+
 
 # ============================================================
 # HEADER
@@ -90,305 +67,40 @@ st.markdown(
 
 st.markdown(
     '<div class="subtitle">'
-    'AI Image Studio • BYOP • Reference Images • HD Generation'
+    'Gemini AI Image Studio • Reference Images • HD Generation'
     '</div>',
     unsafe_allow_html=True
 )
+
 
 # ============================================================
 # SESSION STATE
 # ============================================================
 
-defaults = {
-    "messages": [],
-    "access_token": None,
-    "oauth_state": None,
-    "pkce_verifier": None,
-    "auth_started": False,
-}
+if "messages" not in st.session_state:
 
-for key, value in defaults.items():
-
-    if key not in st.session_state:
-        st.session_state[key] = value
+    st.session_state.messages = [
+        {
+            "role": "assistant",
+            "content":
+            "👋 Welcome to **Miswar's Creators**!\n\n"
+            "Upload your reference image and describe "
+            "exactly what you want."
+        }
+    ]
 
 
 # ============================================================
-# LOAD APP KEY
+# GEMINI API KEY
 # ============================================================
 
 try:
 
-    APP_KEY = st.secrets["POLLINATIONS_APP_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
 except Exception:
 
-    APP_KEY = ""
-
-
-# ============================================================
-# HELPER — BASE64URL
-# ============================================================
-
-def base64url_encode(data):
-
-    return base64.urlsafe_b64encode(
-        data
-    ).rstrip(b"=").decode("ascii")
-
-
-# ============================================================
-# PKCE
-# ============================================================
-
-def create_pkce():
-
-    verifier = base64url_encode(
-        secrets.token_bytes(32)
-    )
-
-    challenge = base64url_encode(
-        hashlib.sha256(
-            verifier.encode("ascii")
-        ).digest()
-    )
-
-    return verifier, challenge
-
-
-# ============================================================
-# CURRENT REDIRECT URI
-# ============================================================
-
-def get_redirect_uri():
-
-    try:
-
-        return st.context.url.split("?")[0]
-
-    except Exception:
-
-        return "http://localhost:8501"
-
-
-REDIRECT_URI = get_redirect_uri()
-
-
-# ============================================================
-# CREATE AUTH URL
-# ============================================================
-
-def create_auth_url():
-
-    verifier, challenge = create_pkce()
-
-    state = secrets.token_urlsafe(32)
-
-    st.session_state.pkce_verifier = verifier
-    st.session_state.oauth_state = state
-    st.session_state.auth_started = True
-
-    params = {
-
-        "response_type": "code",
-
-        "client_id": APP_KEY,
-
-        "redirect_uri": REDIRECT_URI,
-
-        "scope": "usage",
-
-        "state": state,
-
-        "code_challenge": challenge,
-
-        "code_challenge_method": "S256",
-
-        # User can approve a budget on Pollinations screen.
-        "budget": "5",
-
-        # User-authorized token lifetime.
-        "expiry": "7",
-    }
-
-    return (
-        POLLINATIONS_AUTHORIZE_URL
-        + "?"
-        + urllib.parse.urlencode(params)
-    )
-
-
-# ============================================================
-# HANDLE OAUTH CALLBACK
-# ============================================================
-
-def handle_oauth_callback():
-
-    params = st.query_params
-
-    code = params.get("code")
-    returned_state = params.get("state")
-    error = params.get("error")
-
-    if error:
-
-        st.error(
-            f"Pollinations authorization failed: {error}"
-        )
-
-        return
-
-    if not code:
-
-        return
-
-    # --------------------------------------------------------
-    # STATE CHECK
-    # --------------------------------------------------------
-
-    expected_state = st.session_state.get(
-        "oauth_state"
-    )
-
-    if not expected_state:
-
-        st.error(
-            "OAuth session expired. Please connect again."
-        )
-
-        return
-
-    if returned_state != expected_state:
-
-        st.error(
-            "Security check failed: invalid OAuth state."
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # VERIFIER
-    # --------------------------------------------------------
-
-    verifier = st.session_state.get(
-        "pkce_verifier"
-    )
-
-    if not verifier:
-
-        st.error(
-            "PKCE session expired. Please connect again."
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # TOKEN EXCHANGE
-    # --------------------------------------------------------
-
-    payload = {
-
-        "grant_type":
-            "authorization_code",
-
-        "code":
-            code,
-
-        "client_id":
-            APP_KEY,
-
-        "redirect_uri":
-            REDIRECT_URI,
-
-        "code_verifier":
-            verifier,
-    }
-
-    try:
-
-        response = requests.post(
-            POLLINATIONS_TOKEN_URL,
-            data=payload,
-            timeout=30
-        )
-
-        if response.status_code != 200:
-
-            try:
-                error_data = response.json()
-            except Exception:
-                error_data = response.text
-
-            st.error(
-                "Pollinations token exchange failed."
-            )
-
-            st.code(
-                str(error_data)
-            )
-
-            return
-
-        token_data = response.json()
-
-        access_token = token_data.get(
-            "access_token"
-        )
-
-        if not access_token:
-
-            st.error(
-                "No access token returned by Pollinations."
-            )
-
-            st.code(
-                json.dumps(
-                    token_data,
-                    indent=2
-                )
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # SAVE USER TOKEN IN SESSION ONLY
-        # ----------------------------------------------------
-
-        st.session_state.access_token = (
-            access_token
-        )
-
-        st.session_state.pkce_verifier = None
-        st.session_state.oauth_state = None
-        st.session_state.auth_started = False
-
-        # Remove OAuth query params.
-        st.query_params.clear()
-
-        st.success(
-            "✅ Pollinations connected successfully!"
-        )
-
-        st.rerun()
-
-    except Exception as e:
-
-        st.error(
-            "OAuth connection error."
-        )
-
-        st.code(
-            str(e)
-        )
-
-
-# ============================================================
-# HANDLE CALLBACK BEFORE UI
-# ============================================================
-
-if APP_KEY:
-
-    handle_oauth_callback()
+    GEMINI_API_KEY = ""
 
 
 # ============================================================
@@ -399,70 +111,37 @@ with st.sidebar:
 
     st.title("⚙️ Studio Controls")
 
-    # ========================================================
-    # BYOP CONNECTION
-    # ========================================================
+    # --------------------------------------------------------
+    # API STATUS
+    # --------------------------------------------------------
 
-    st.subheader("🔐 Pollinations BYOP")
+    st.subheader("🔑 Gemini API")
 
-    if st.session_state.access_token:
+    if GEMINI_API_KEY:
 
-        st.success(
-            "🟢 Pollinations Connected"
-        )
-
-        st.caption(
-            "Generation will use the user's authorized "
-            "Pollinations balance."
-        )
-
-        if st.button(
-            "🔓 Disconnect",
-            use_container_width=True
-        ):
-
-            st.session_state.access_token = None
-
-            st.rerun()
+        st.success("🟢 Gemini API Connected")
 
     else:
 
-        if not APP_KEY:
+        st.error(
+            "Gemini API key not found."
+        )
 
-            st.error(
-                "POLLINATIONS_APP_KEY is missing."
-            )
-
-            st.info(
-                "Add your pk_ App Key to "
-                ".streamlit/secrets.toml"
-            )
-
-        else:
-
-            auth_url = create_auth_url()
-
-            st.link_button(
-                "🔐 Connect Pollinations",
-                auth_url,
-                use_container_width=True
-            )
-
-            st.caption(
-                "Users authorize their own Pollen. "
-                "Your app does not use your personal API key."
-            )
+        st.caption(
+            "Add GEMINI_API_KEY to "
+            ".streamlit/secrets.toml"
+        )
 
     st.divider()
 
-    # ========================================================
+    # --------------------------------------------------------
     # REFERENCE IMAGES
-    # ========================================================
+    # --------------------------------------------------------
 
     st.subheader("🖼️ Reference Images")
 
     uploaded_files = st.file_uploader(
-        "Upload up to 6 reference images",
+        "Upload reference images",
         type=[
             "jpg",
             "jpeg",
@@ -472,18 +151,21 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
+    # Gemini 2.5 Flash Image works best with up to 3 images.
     if uploaded_files:
 
-        if len(uploaded_files) > 6:
+        if len(uploaded_files) > 3:
 
             st.warning(
-                "Maximum 6 images allowed."
+                "Gemini 2.5 Flash Image works best "
+                "with up to 3 reference images. "
+                "Only the first 3 will be used."
             )
 
-            uploaded_files = uploaded_files[:6]
+            uploaded_files = uploaded_files[:3]
 
         st.success(
-            f"✅ {len(uploaded_files)} image(s) attached"
+            f"✅ {len(uploaded_files)} reference image(s)"
         )
 
         cols = st.columns(2)
@@ -502,118 +184,111 @@ with st.sidebar:
 
     st.divider()
 
-    # ========================================================
+    # --------------------------------------------------------
     # MODEL
-    # ========================================================
+    # --------------------------------------------------------
 
-    st.subheader("🧠 AI Model")
+    st.subheader("🧠 Gemini Image Model")
 
     model = st.selectbox(
-        "Image Model",
+        "Choose Model",
         [
-            "nanobanana-2",
-            "nanobanana",
-            "nanobanana-pro",
-            "seedream5",
-            "gptimage-large",
-            "gpt-image-2",
-            "kontext",
-            "p-image-edit",
-            "flux"
+            "gemini-2.5-flash-image",
+            "gemini-3.1-flash-image"
         ],
         index=0
     )
 
-    st.divider()
+    if model == "gemini-2.5-flash-image":
 
-    # ========================================================
-    # SIZE
-    # ========================================================
-
-    st.subheader("📐 Image Size")
-
-    size_mapping = {
-
-        "16:9 — YouTube Thumbnail":
-            (1920, 1080),
-
-        "9:16 — Shorts / Reels":
-            (1080, 1920),
-
-        "1:1 — Square":
-            (1536, 1536),
-
-        "4:5 — Instagram":
-            (1080, 1350),
-
-        "3:4 — Vertical":
-            (1080, 1440),
-
-        "4:5 — High Quality":
-            (1536, 1920),
-    }
-
-    aspect_ratio_label = st.selectbox(
-        "Aspect Ratio",
-        list(size_mapping.keys())
-    )
-
-    width, height = size_mapping[
-        aspect_ratio_label
-    ]
-
-    st.caption(
-        f"{width} × {height}px"
-    )
-
-    st.divider()
-
-    # ========================================================
-    # QUALITY
-    # ========================================================
-
-    st.subheader("✨ Quality")
-
-    quality = st.selectbox(
-        "Quality",
-        [
-            "high",
-            "medium",
-            "low"
-        ],
-        index=0
-    )
-
-    # ========================================================
-    # SEED
-    # ========================================================
-
-    random_seed = st.checkbox(
-        "🎲 Random Seed",
-        value=True
-    )
-
-    if random_seed:
-
-        seed = random.randint(
-            1,
-            999999999
+        st.caption(
+            "Nano Banana — optimized for fast "
+            "image generation and editing."
         )
 
     else:
 
-        seed = st.number_input(
-            "Seed",
-            min_value=1,
-            max_value=999999999,
-            value=123456
+        st.caption(
+            "Nano Banana 2 — higher quality and "
+            "up to 4K output, subject to account access."
         )
 
     st.divider()
 
-    # ========================================================
-    # CLEAR
-    # ========================================================
+    # --------------------------------------------------------
+    # ASPECT RATIO
+    # --------------------------------------------------------
+
+    st.subheader("📐 Image Size")
+
+    aspect_ratio = st.selectbox(
+        "Aspect Ratio",
+        [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:5",
+            "3:4",
+            "4:3",
+            "3:2",
+            "21:9"
+        ],
+        index=0
+    )
+
+    st.caption(
+        f"Output ratio: **{aspect_ratio}**"
+    )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # RESOLUTION
+    # --------------------------------------------------------
+
+    st.subheader("✨ Resolution")
+
+    if model == "gemini-2.5-flash-image":
+
+        resolution = "1K"
+
+        st.info(
+            "Gemini 2.5 Flash Image outputs "
+            "approximately 1K resolution."
+        )
+
+    else:
+
+        resolution = st.selectbox(
+            "Output Resolution",
+            [
+                "1K",
+                "2K",
+                "4K"
+            ],
+            index=1
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # RANDOM SEED
+    # --------------------------------------------------------
+
+    random_seed = random.randint(
+        1,
+        999999999
+    )
+
+    st.caption(
+        f"🎲 Generation ID: `{random_seed}`"
+    )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # CLEAR CHAT
+    # --------------------------------------------------------
 
     if st.button(
         "🗑️ Clear Chat",
@@ -626,239 +301,224 @@ with st.sidebar:
 
 
 # ============================================================
-# IMAGE GENERATION
+# GEMINI CLIENT
+# ============================================================
+
+client = None
+
+if GEMINI_API_KEY:
+
+    try:
+
+        client = genai.Client(
+            api_key=GEMINI_API_KEY
+        )
+
+    except Exception as e:
+
+        st.error(
+            f"Gemini client error: {e}"
+        )
+
+
+# ============================================================
+# REFERENCE IMAGE LOADER
+# ============================================================
+
+def load_reference_images(files):
+
+    images = []
+
+    for file in files:
+
+        try:
+
+            image = Image.open(
+                BytesIO(
+                    file.getvalue()
+                )
+            ).convert("RGB")
+
+            images.append(image)
+
+        except Exception as e:
+
+            st.warning(
+                f"Could not read {file.name}: {e}"
+            )
+
+    return images
+
+
+# ============================================================
+# GENERATE IMAGE
 # ============================================================
 
 def generate_image(
     prompt,
-    access_token,
+    reference_images,
     model,
-    width,
-    height,
-    quality,
-    seed,
-    reference_images
+    aspect_ratio,
+    resolution
 ):
 
-    headers = {
-
-        "Authorization":
-            f"Bearer {access_token}"
-    }
-
     # --------------------------------------------------------
-    # STRONG REFERENCE PROMPT
+    # STRONG REFERENCE INSTRUCTIONS
     # --------------------------------------------------------
 
     if reference_images:
 
-        final_prompt = f"""
-Use the uploaded reference image(s) as the PRIMARY
-visual reference for this generation.
+        reference_prompt = f"""
+You are an expert commercial fashion image editor.
 
-IMPORTANT REFERENCE RULES:
+The uploaded reference image(s) are IMPORTANT VISUAL
+REFERENCES.
 
-Study the reference image(s) carefully.
+Study them carefully before generating the final image.
 
-Preserve the important visual characteristics from
-the reference whenever compatible with the user's request:
+The user's requested changes should be applied while
+preserving the important visual information from the
+reference image(s).
 
-• clothing design
-• dress structure
-• garment silhouette
-• neckline
-• sleeves
-• fabric appearance
-• exact or very similar colors
-• color placement
-• embroidery
-• patterns
-• accessories
-• styling
-• proportions
-• important visual details
+REFERENCE PRESERVATION PRIORITIES:
 
-Do NOT ignore the reference.
+1. Dress / clothing design
+2. Exact dress color
+3. Color placement
+4. Garment silhouette
+5. Neckline
+6. Sleeves
+7. Fabric appearance
+8. Embroidery and patterns
+9. Accessories
+10. Overall styling
+11. Important visual details
 
-Do NOT create an unrelated design.
+DO NOT ignore the reference images.
 
-If the user asks for a change, make that change while
-keeping the recognizable characteristics of the reference.
+DO NOT invent a completely unrelated dress.
+
+If the user requests a new model, background, pose,
+camera angle or composition, change those elements while
+keeping the requested reference clothing/design
+recognizable.
+
+If the user says to keep the dress color unchanged,
+preserve the original color as accurately as possible.
 
 USER REQUEST:
 
 {prompt}
 
-QUALITY:
+FINAL IMAGE REQUIREMENTS:
 
-Photorealistic premium fashion photography,
-high detail,
-sharp garment texture,
-realistic fabric,
-accurate construction,
-natural skin,
-professional studio lighting,
-cinematic but realistic lighting,
-premium editorial photography,
+Professional commercial fashion photography,
+photorealistic,
+extremely detailed,
+realistic fabric texture,
+accurate clothing construction,
+natural skin texture,
+professional lighting,
+realistic shadows,
+sharp subject,
 clean composition,
-high dynamic range,
-commercial campaign quality.
+premium fashion campaign,
+high-end editorial photography.
+
+Create the final image in {aspect_ratio}.
 """
 
     else:
 
-        final_prompt = f"""
+        reference_prompt = f"""
+Create a professional photorealistic image based on
+the following request:
+
 {prompt}
 
-Create a premium photorealistic image.
+Requirements:
 
-High detail,
-sharp textures,
+Premium commercial photography,
 realistic materials,
-professional photography,
-natural lighting,
+realistic fabric,
+sharp details,
+natural skin,
+professional lighting,
+realistic shadows,
 clean composition,
-high dynamic range,
-commercial quality.
+high-end editorial fashion photography,
+aspect ratio {aspect_ratio}.
 """
 
     # --------------------------------------------------------
-    # MULTIPART IMAGES
+    # CONTENTS
     # --------------------------------------------------------
 
-    files = []
+    contents = []
 
-    for reference in reference_images:
+    # Put reference images BEFORE the instruction.
+    for image in reference_images:
 
-        files.append(
-            (
-                "image",
-                (
-                    reference.name,
-                    reference.getvalue(),
-                    reference.type or "image/png"
-                )
-            )
-        )
+        contents.append(image)
+
+    contents.append(
+        reference_prompt
+    )
 
     # --------------------------------------------------------
-    # FORM DATA
+    # CONFIG
     # --------------------------------------------------------
 
-    data = {
-
-        "model":
-            model,
-
-        "prompt":
-            final_prompt,
-
-        "width":
-            str(width),
-
-        "height":
-            str(height),
-
-        "quality":
-            quality,
-
-        "seed":
-            str(seed),
+    image_config = {
+        "aspect_ratio": aspect_ratio
     }
 
-    # --------------------------------------------------------
-    # REQUEST
-    # --------------------------------------------------------
+    # Gemini 3 image models support image_size.
+    if model == "gemini-3.1-flash-image":
 
-    response = requests.post(
+        image_config["image_size"] = resolution
 
-        POLLINATIONS_IMAGE_URL,
+    config = types.GenerateContentConfig(
 
-        headers=headers,
+        response_modalities=[
+            "IMAGE"
+        ],
 
-        data=data,
-
-        files=files if files else None,
-
-        timeout=300
+        response_format={
+            "image": image_config
+        }
     )
 
     # --------------------------------------------------------
-    # ERROR
+    # GENERATE
     # --------------------------------------------------------
 
-    if response.status_code != 200:
+    response = client.models.generate_content(
 
-        try:
+        model=model,
 
-            error_data = response.json()
+        contents=contents,
 
-        except Exception:
-
-            error_data = response.text
-
-        raise RuntimeError(
-            f"Pollinations API "
-            f"{response.status_code}: "
-            f"{error_data}"
-        )
-
-    # --------------------------------------------------------
-    # IMAGE RESPONSE
-    # --------------------------------------------------------
-
-    content_type = (
-        response.headers
-        .get("content-type", "")
-        .lower()
+        config=config
     )
 
-    if "image" in content_type:
-
-        return response.content
-
     # --------------------------------------------------------
-    # JSON RESPONSE FALLBACK
+    # FIND IMAGE
     # --------------------------------------------------------
 
-    try:
+    for part in response.parts:
 
-        result = response.json()
+        if part.inline_data is not None:
 
-        if "data" in result:
+            return part.as_image()
 
-            first = result["data"][0]
-
-            if "b64_json" in first:
-
-                return base64.b64decode(
-                    first["b64_json"]
-                )
-
-            if "url" in first:
-
-                image_response = requests.get(
-                    first["url"],
-                    timeout=300
-                )
-
-                image_response.raise_for_status()
-
-                return image_response.content
-
-        raise RuntimeError(
-            f"Unexpected response: {result}"
-        )
-
-    except ValueError:
-
-        raise RuntimeError(
-            "Pollinations returned an unexpected response."
-        )
+    raise RuntimeError(
+        "Gemini did not return an image."
+    )
 
 
 # ============================================================
-# CHAT HISTORY
+# DISPLAY CHAT HISTORY
 # ============================================================
 
 for message in st.session_state.messages:
@@ -871,10 +531,10 @@ for message in st.session_state.messages:
             message["content"]
         )
 
-        if message.get("image_bytes"):
+        if message.get("image"):
 
             st.image(
-                message["image_bytes"],
+                message["image"],
                 use_container_width=True
             )
 
@@ -895,14 +555,13 @@ user_prompt = st.chat_input(
 if user_prompt:
 
     # --------------------------------------------------------
-    # AUTH CHECK
+    # API CHECK
     # --------------------------------------------------------
 
-    if not st.session_state.access_token:
+    if not GEMINI_API_KEY:
 
         st.error(
-            "🔐 Please connect Pollinations first "
-            "using the BYOP button in the sidebar."
+            "❌ Gemini API key is missing."
         )
 
         st.stop()
@@ -913,8 +572,11 @@ if user_prompt:
 
     st.session_state.messages.append(
         {
-            "role": "user",
-            "content": user_prompt
+            "role":
+                "user",
+
+            "content":
+                user_prompt
         }
     )
 
@@ -930,61 +592,68 @@ if user_prompt:
 
     with st.chat_message("assistant"):
 
-        status = st.empty()
-
         try:
 
-            if uploaded_files:
-
-                status.info(
-                    "🖼️ Sending reference image(s) "
-                    "to the image-edit model..."
-                )
-
-            else:
-
-                status.info(
-                    "🎨 Preparing generation..."
-                )
-
             with st.spinner(
-                "🔥 Miswar's Creators is rendering..."
+                "🔥 Gemini is studying your reference "
+                "and generating the image..."
             ):
 
-                image_bytes = generate_image(
+                reference_images = (
+                    load_reference_images(
+                        uploaded_files
+                        if uploaded_files
+                        else []
+                    )
+                )
+
+                generated_image = generate_image(
 
                     prompt=user_prompt,
 
-                    access_token=
-                        st.session_state.access_token,
+                    reference_images=
+                        reference_images,
 
                     model=model,
 
-                    width=width,
+                    aspect_ratio=
+                        aspect_ratio,
 
-                    height=height,
-
-                    quality=quality,
-
-                    seed=seed,
-
-                    reference_images=
-                        uploaded_files or []
+                    resolution=
+                        resolution
                 )
 
-            status.empty()
+            # ------------------------------------------------
+            # RESULT
+            # ------------------------------------------------
 
             st.success(
                 "✅ Image generated successfully!"
             )
 
             st.image(
-                image_bytes,
+                generated_image,
                 caption=(
                     f"{model} • "
-                    f"{width}×{height}"
+                    f"{aspect_ratio} • "
+                    f"{resolution}"
                 ),
                 use_container_width=True
+            )
+
+            # ------------------------------------------------
+            # CONVERT TO PNG
+            # ------------------------------------------------
+
+            image_buffer = BytesIO()
+
+            generated_image.save(
+                image_buffer,
+                format="PNG"
+            )
+
+            image_bytes = (
+                image_buffer.getvalue()
             )
 
             # ------------------------------------------------
@@ -998,7 +667,7 @@ if user_prompt:
                 data=image_bytes,
 
                 file_name=
-                    "miswars_creators_image.png",
+                    "miswars_creators_gemini.png",
 
                 mime="image/png",
 
@@ -1012,20 +681,17 @@ if user_prompt:
             info = (
                 f"✨ **Generated Successfully**\n\n"
                 f"**Model:** `{model}`  \n"
-                f"**Size:** `{width} × {height}`  \n"
-                f"**Quality:** `{quality}`  \n"
-                f"**Seed:** `{seed}`"
+                f"**Aspect Ratio:** `{aspect_ratio}`  \n"
+                f"**Resolution:** `{resolution}`  \n"
+                f"**Reference Images:** "
+                f"`{len(reference_images)}`"
             )
 
-            if uploaded_files:
-
-                info += (
-                    f"  \n"
-                    f"**References:** "
-                    f"`{len(uploaded_files)}`"
-                )
-
             st.markdown(info)
+
+            # ------------------------------------------------
+            # SAVE
+            # ------------------------------------------------
 
             st.session_state.messages.append(
                 {
@@ -1035,19 +701,24 @@ if user_prompt:
                     "content":
                         info,
 
-                    "image_bytes":
-                        image_bytes
+                    "image":
+                        generated_image
                 }
             )
 
         except Exception as e:
 
-            status.empty()
-
             st.error(
-                "❌ Generation failed."
+                "❌ Gemini image generation failed."
             )
 
             st.code(
                 str(e)
+            )
+
+            st.info(
+                "If the error mentions quota, billing, "
+                "or RESOURCE_EXHAUSTED, your Gemini API "
+                "project does not currently have image "
+                "generation access."
             )
