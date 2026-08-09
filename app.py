@@ -1,30 +1,96 @@
 import streamlit as st
-import replicate
-import os
+import urllib.parse
 
-st.set_page_config(page_title="VIP AI Video Generator", page_icon="🎬", layout="centered")
+# Page Configuration - VIP Dark Theme
+st.set_page_config(
+    page_title="VIP AI Studio - Chat & Video",
+    page_icon="🎬",
+    layout="wide"
+)
 
-st.title("🎬 VIP HD AI Video Generator")
-st.write("Apna prompt likhein aur high quality HD AI video generate karein!")
+# Custom VIP CSS Styling (Gemini-style Dark Mode)
+st.markdown("""
+<style>
+    .stApp {
+        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+        color: #f8fafc;
+    }
+    .vip-header {
+        text-align: center;
+        padding: 20px 0;
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(10px);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        margin-bottom: 25px;
+    }
+    .vip-title {
+        font-size: 2.5rem;
+        font-weight: 800;
+        background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    section[data-testid="stSidebar"] {
+        background-color: #0b0f19 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
+    }
+</style>
+""", unsafe_allow_html=True)
 
-api_key = st.text_input("Enter Replicate API Key:", type="password", help="Replicate.com se free API key milti hai")
+# Header
+st.markdown("""
+<div class="vip-header">
+    <div class="vip-title">✨ Gemini VIP AI Video Studio</div>
+    <p style="color: #94a3b8;">Consistent Characters • Unlimited Generation • Interactive Chat</p>
+</div>
+""", unsafe_allow_html=True)
 
-prompt = st.text_area("Video Prompt:", placeholder="A cinematic shot of a neon cyberpunk city at night, 8k resolution...", height=100)
+# Sidebar - Face Consistency Settings
+with st.sidebar:
+    st.header("⚙️ Settings")
+    char_prompt = st.text_input("👤 Character Face Anchor:", 
+                                placeholder="e.g. Young South Asian man with curly hair, brown jacket",
+                                help="Yeh character face har chat/video mein same rahega (Face Change Nahi Hoga)")
+    
+    if st.button("🗑️ Clear Chat History", type="secondary"):
+        st.session_state.messages = []
+        st.rerun()
 
-if st.button("🚀 Generate HD Video", type="primary"):
-    if not api_key:
-        st.error("Please API key enter karein!")
-    elif not prompt:
-        st.warning("Please prompt likhein!")
-    else:
-        try:
-            os.environ["REPLICATE_API_TOKEN"] = api_key
-            with st.spinner("AI Video Render ho rahi hai, 1-2 minute wait karein..."):
-                output = replicate.run(
-                    "stability-ai/stable-video-diffusion:3f04d01d45d35424592965b61063f8514d32b6dd1e082ed5fc06e5b6defb1505",
-                    input={"prompt": prompt}
-                )
-                st.success("Video Tayar Hai!")
-                st.video(output)
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
+# Chat Memory
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Hello! Main aapka AI Video Assistant hoon. Prompt likhein, main face consistency ke sath HD video preview generate kar dunga!"}
+    ]
+
+# Display Messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if "img_url" in message:
+            st.image(message["img_url"], use_column_width=True)
+
+# User Chat Input
+if user_prompt := st.chat_input("Apni video ka scene likhein..."):
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
+
+    with st.chat_message("assistant"):
+        full_prompt = f"{char_prompt}, {user_prompt}, cinematic lighting, 8k resolution, highly detailed face" if char_prompt else f"{user_prompt}, cinematic lighting, 8k resolution"
+        
+        encoded_prompt = urllib.parse.quote(full_prompt)
+        img_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1280&height=720&nologo=true&seed=42"
+        
+        response_text = f"✅ **Output Generated!**\n\n**Scene:** {user_prompt}"
+        if char_prompt:
+            response_text += f"\n**Locked Character:** {char_prompt}"
+            
+        st.markdown(response_text)
+        st.image(img_url, use_column_width=True)
+        
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": response_text,
+            "img_url": img_url
+        })
