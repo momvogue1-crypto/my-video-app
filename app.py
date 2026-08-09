@@ -2,9 +2,8 @@ import streamlit as st
 import requests
 import base64
 from PIL import Image
-import io
 
-# 1. Page Configuration
+# Page Configuration
 st.set_page_config(
     page_title="Miswar's Creators AI",
     page_icon="🤖",
@@ -12,7 +11,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling
+# Custom Styling (Clean UI)
 st.markdown("""
 <style>
     .stApp { background-color: #ffffff !important; color: #111111 !important; }
@@ -23,16 +22,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Main Title
 st.markdown('<div class="main-title">Miswar\'s Creators AI 🤖</div>', unsafe_allow_html=True)
 
-# 2. Sidebar Setup
+# Sidebar Options
 with st.sidebar:
     st.title("⚙️ Settings")
-    api_key = st.text_input("🔑 Enter Gemini API Key:", type="password")
+    api_key = st.text_input("🔑 Enter OpenRouter API Key:", type="password")
     
     st.divider()
     st.subheader("🖼️ Upload Image (Optional)")
-    uploaded_file = st.file_uploader("Image ke bare mein poochne ke liye:", type=["jpg", "jpeg", "png"])
+    uploaded_file = st.file_uploader("Image upload karke poochne ke liye:", type=["jpg", "jpeg", "png"])
     
     if uploaded_file:
         img = Image.open(uploaded_file)
@@ -43,77 +43,80 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# 3. Chat Session Initialization
+# Memory Setup
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main Google Gemini AI se powered hoon. Kuch bhi pochhein!"}
+        {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main Multi-AI Engine se powered hoon. Kuch bhi pochhein!"}
     ]
 
-# Display Existing Messages
+# Display Previous Messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
-# Function to call Gemini REST API directly
-def call_gemini_api(api_key, prompt, image_file=None):
-    # Standard endpoints list to try automatically
-    models_to_try = [
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-pro"
-    ]
+# OpenRouter Function Call
+def get_openrouter_response(api_key, prompt, image_file=None):
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     
-    parts = []
+    content = []
     
-    # If image is attached, convert to Base64
+    # Text Prompt
+    content.append({"type": "text", "text": prompt})
+    
+    # Image Base64 Encoding
     if image_file:
         image_bytes = image_file.getvalue()
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         mime_type = image_file.type
-        parts.append({
-            "inline_data": {
-                "mime_type": mime_type,
-                "data": base64_image
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime_type};base64,{base64_image}"
             }
         })
+        
+    payload = {
+        "model": "google/gemini-2.0-flash-lite-001",
+        "messages": [
+            {
+                "role": "user",
+                "content": content
+            }
+        ]
+    }
     
-    parts.append({"text": prompt})
-    payload = {"contents": [{"parts": parts}]}
-    
-    last_error = ""
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        try:
-            res = requests.post(url, json=payload, timeout=30)
-            data = res.json()
-            
-            if res.status_code == 200 and "candidates" in data:
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            elif "error" in data:
-                last_error = data["error"].get("message", "Unknown error")
-                if "429" in str(res.status_code) or "RESOURCE_EXHAUSTED" in last_error:
-                    return "⏳ **Rate Limit Hit**: Google API per free quota complete ho gaya hai. Please 30 seconds wait karke try karein ya naye Google account se API Key banayein."
-        except Exception as e:
-            last_error = str(e)
-            
-    return f"⚠️ Error: {last_error}"
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        data = response.json()
+        
+        if response.status_code == 200 and "choices" in data:
+            return data["choices"][0]["message"]["content"]
+        elif "error" in data:
+            return f"⚠️ API Error: {data['error'].get('message', 'Invalid key or configuration')}"
+        else:
+            return "⚠️ Connection Error: Responded with unknown format."
+    except Exception as e:
+        return f"⚠️ Network Error: {str(e)}"
 
-# 4. User Chat Input Logic
-if user_prompt := st.chat_input("Ask Gemini anything..."):
+# User Input Logic
+if user_prompt := st.chat_input("Ask AI anything..."):
     if not api_key:
-        st.error("⚠️ Pehle Sidebar mein apni Gemini API Key enter karein!")
+        st.error("⚠️ Pehle Sidebar mein apni OpenRouter API Key enter karein!")
     else:
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
             st.write(user_prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Miswar's AI is thinking..."):
-                response_text = call_gemini_api(api_key, user_prompt, uploaded_file)
-                st.write(response_text)
+            with st.spinner("AI is thinking..."):
+                reply = get_openrouter_response(api_key, user_prompt, uploaded_file)
+                st.write(reply)
                 
                 st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": response_text
+                    "role": "assistant",
+                    "content": reply
                 })
