@@ -2,7 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 
-# Page Setup - Miswar's Creators Theme
+# Page Setup
 st.set_page_config(
     page_title="Miswar's Creators - Powered by Gemini",
     page_icon="🤖",
@@ -63,6 +63,17 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Function to get available model automatically
+def get_working_model():
+    model_candidates = ['gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-pro']
+    for model_name in model_candidates:
+        try:
+            m = genai.GenerativeModel(model_name)
+            return m
+        except Exception:
+            continue
+    return genai.GenerativeModel('gemini-1.5-flash')
+
 # User Chat Input
 if user_prompt := st.chat_input("Ask Gemini anything..."):
     if not api_key:
@@ -77,8 +88,8 @@ if user_prompt := st.chat_input("Ask Gemini anything..."):
                 try:
                     genai.configure(api_key=api_key)
                     
-                    # Official Gemini Model
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    # Auto-select working model
+                    model = get_working_model()
                     
                     if uploaded_file:
                         img = Image.open(uploaded_file)
