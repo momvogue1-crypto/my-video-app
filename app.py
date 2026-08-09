@@ -60,7 +60,7 @@ with st.sidebar:
 # Chat Memory
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! Main aapka AI Video Assistant hoon. Prompt likhein, main face consistency ke sath HD video preview generate kar dunga!"}
+        {"role": "assistant", "content": "Hello! Main aapka AI Assistant hoon. Prompt likhein, main face consistency ke sath HD preview generate kar dunga!"}
     ]
 
 # Display Messages
@@ -68,7 +68,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "img_url" in message:
-            st.image(message["img_url"], use_column_width=True)
+            st.image(message["img_url"], use_container_width=True)
 
 # User Chat Input
 if user_prompt := st.chat_input("Apni video ka scene likhein..."):
@@ -87,7 +87,7 @@ if user_prompt := st.chat_input("Apni video ka scene likhein..."):
             response_text += f"\n**Locked Character:** {char_prompt}"
             
         st.markdown(response_text)
-        st.image(img_url, use_column_width=True)
+        st.image(img_url, use_container_width=True)
         
         st.session_state.messages.append({
             "role": "assistant", 
