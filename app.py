@@ -1,14 +1,16 @@
 import streamlit as st
-from google import genai
-from google.genai import types
-from PIL import Image
+from gradio_client import Client, handle_file
+from PIL import Image, ImageOps
 from io import BytesIO
 import random
+import tempfile
+import os
 
 
 # ============================================================
 # MISWAR'S CREATORS
-# Gemini Image Generation + Reference Images
+# FREE REFERENCE IMAGE AI EDITOR
+# Powered by public Hugging Face Qwen Image Edit Space
 # ============================================================
 
 st.set_page_config(
@@ -20,7 +22,7 @@ st.set_page_config(
 
 
 # ============================================================
-# CUSTOM CSS
+# CSS
 # ============================================================
 
 st.markdown("""
@@ -31,25 +33,37 @@ st.markdown("""
 }
 
 .main-title {
-    font-size: 42px;
-    font-weight: 800;
     text-align: center;
+    font-size: 44px;
+    font-weight: 900;
     color: #111111;
-    margin-bottom: 5px;
+    margin-top: 10px;
+    margin-bottom: 0px;
 }
 
 .subtitle {
     text-align: center;
     color: #666666;
-    font-size: 17px;
+    font-size: 16px;
     margin-bottom: 30px;
+}
+
+.section-title {
+    font-size: 20px;
+    font-weight: 800;
 }
 
 div.stButton > button {
     width: 100%;
-    border-radius: 12px;
     min-height: 48px;
-    font-weight: 700;
+    border-radius: 12px;
+    font-weight: 800;
+}
+
+.stDownloadButton > button {
+    width: 100%;
+    border-radius: 12px;
+    font-weight: 800;
 }
 
 </style>
@@ -67,7 +81,8 @@ st.markdown(
 
 st.markdown(
     '<div class="subtitle">'
-    'Gemini AI Image Studio • Reference Images • HD Generation'
+    'FREE AI IMAGE STUDIO • REFERENCE IMAGE EDITING • '
+    'QWEN IMAGE EDIT'
     '</div>',
     unsafe_allow_html=True
 )
@@ -83,24 +98,395 @@ if "messages" not in st.session_state:
         {
             "role": "assistant",
             "content":
-            "👋 Welcome to **Miswar's Creators**!\n\n"
-            "Upload your reference image and describe "
-            "exactly what you want."
+            "👋 **Welcome to Miswar's Creators!**\n\n"
+            "Upload a reference image, write your instruction, "
+            "and generate your edited image."
         }
     ]
 
 
 # ============================================================
-# GEMINI API KEY
+# HUGGING FACE SPACE
 # ============================================================
 
-try:
+SPACE_ID = "Qwen/Qwen-Image-Edit"
 
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
-except Exception:
+# ============================================================
+# CONNECT TO FREE QWEN SPACE
+# ============================================================
 
-    GEMINI_API_KEY = ""
+@st.cache_resource(show_spinner=False)
+def get_qwen_client():
+
+    return Client(
+        SPACE_ID,
+        verbose=False
+    )
+
+
+# ============================================================
+# ASPECT RATIO
+# ============================================================
+
+RATIO_MAP = {
+
+    "16:9": (16, 9),
+
+    "9:16": (9, 16),
+
+    "1:1": (1, 1),
+
+    "4:5": (4, 5),
+
+    "3:4": (3, 4),
+
+    "4:3": (4, 3),
+
+    "3:2": (3, 2),
+
+    "2:3": (2, 3)
+}
+
+
+# ============================================================
+# PREPARE IMAGE
+# ============================================================
+
+def prepare_reference_image(
+    uploaded_file,
+    ratio
+):
+
+    image = Image.open(
+        uploaded_file
+    ).convert("RGB")
+
+    target_w, target_h = RATIO_MAP[
+        ratio
+    ]
+
+    original_w, original_h = image.size
+
+    original_ratio = (
+        original_w / original_h
+    )
+
+    target_ratio = (
+        target_w / target_h
+    )
+
+    # --------------------------------------------------------
+    # We avoid aggressive cropping.
+    # Instead we fit the image inside target ratio.
+    # --------------------------------------------------------
+
+    if original_ratio > target_ratio:
+
+        # Image is wider.
+        new_h = original_h
+
+        new_w = int(
+            original_h * target_ratio
+        )
+
+        left = (
+            original_w - new_w
+        ) // 2
+
+        image = image.crop(
+            (
+                left,
+                0,
+                left + new_w,
+                original_h
+            )
+        )
+
+    else:
+
+        # Image is taller.
+        new_w = original_w
+
+        new_h = int(
+            original_w / target_ratio
+        )
+
+        top = (
+            original_h - new_h
+        ) // 2
+
+        image = image.crop(
+            (
+                0,
+                top,
+                original_w,
+                top + new_h
+            )
+        )
+
+    # --------------------------------------------------------
+    # Resize to a reasonable generation size
+    # --------------------------------------------------------
+
+    base = 1024
+
+    if target_w >= target_h:
+
+        final_w = base
+
+        final_h = int(
+            base / target_ratio
+        )
+
+    else:
+
+        final_h = base
+
+        final_w = int(
+            base * target_ratio
+        )
+
+    image = image.resize(
+        (
+            final_w,
+            final_h
+        ),
+        Image.Resampling.LANCZOS
+    )
+
+    return image
+
+
+# ============================================================
+# SAVE TEMP IMAGE
+# ============================================================
+
+def save_temp_image(image):
+
+    temp_file = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".png"
+    )
+
+    image.save(
+        temp_file.name,
+        format="PNG"
+    )
+
+    temp_file.close()
+
+    return temp_file.name
+
+
+# ============================================================
+# BUILD STRONG PROMPT
+# ============================================================
+
+def build_prompt(
+    user_prompt,
+    ratio,
+    quality,
+    keep_reference
+):
+
+    reference_instruction = ""
+
+    if keep_reference:
+
+        reference_instruction = """
+VERY IMPORTANT REFERENCE IMAGE INSTRUCTIONS:
+
+Use the uploaded image as the PRIMARY visual reference.
+
+Preserve the important visual identity of the reference.
+
+Pay special attention to:
+
+- clothing design
+- dress structure
+- garment silhouette
+- exact dress color
+- color placement
+- fabric appearance
+- neckline
+- sleeves
+- embroidery
+- prints
+- patterns
+- accessories
+- overall styling
+- important visual details
+
+DO NOT ignore the reference image.
+
+DO NOT create a completely unrelated dress.
+
+If the user asks to change the model, background,
+pose, camera position, lighting or environment,
+make those changes while keeping the important
+reference clothing/design recognizable.
+
+If the user says KEEP THE DRESS COLOR,
+do not change the dress color.
+
+If the reference shows a complete outfit,
+preserve the outfit design accurately.
+"""
+
+    final_prompt = f"""
+{reference_instruction}
+
+USER REQUEST:
+
+{user_prompt}
+
+COMPOSITION:
+
+Create the final image in {ratio} aspect ratio.
+
+QUALITY:
+
+{quality}
+
+Create a premium, highly detailed,
+photorealistic commercial image.
+
+Realistic human anatomy,
+realistic skin,
+realistic hair,
+realistic fabric texture,
+accurate garment construction,
+sharp clothing details,
+natural lighting,
+professional shadows,
+high dynamic range,
+premium fashion photography,
+professional editorial photography,
+clean composition.
+
+Make the final image visually polished
+and professionally photographed.
+
+Do not add unnecessary objects.
+
+Do not change important reference details
+unless specifically requested by the user.
+"""
+
+    return final_prompt
+
+
+# ============================================================
+# GENERATE USING QWEN SPACE
+# ============================================================
+
+def generate_with_qwen(
+    image_path,
+    prompt
+):
+
+    client = get_qwen_client()
+
+    seed = random.randint(
+        0,
+        2147483647
+    )
+
+    # --------------------------------------------------------
+    # Qwen public Space function
+    # --------------------------------------------------------
+
+    result = client.predict(
+
+        handle_file(image_path),
+
+        prompt,
+
+        seed,
+
+        True,
+
+        4.0,
+
+        50,
+
+        True,
+
+        api_name="/infer"
+    )
+
+    # --------------------------------------------------------
+    # Result normally contains:
+    # [generated_image, seed]
+    # --------------------------------------------------------
+
+    if isinstance(
+        result,
+        (list, tuple)
+    ):
+
+        generated = result[0]
+
+    else:
+
+        generated = result
+
+    # --------------------------------------------------------
+    # Handle file path
+    # --------------------------------------------------------
+
+    if isinstance(
+        generated,
+        str
+    ):
+
+        if os.path.exists(
+            generated
+        ):
+
+            image = Image.open(
+                generated
+            ).convert("RGB")
+
+            return image
+
+        # Sometimes Gradio returns a URL.
+        if generated.startswith(
+            "http"
+        ):
+
+            import requests
+
+            response = requests.get(
+                generated,
+                timeout=120
+            )
+
+            response.raise_for_status()
+
+            return Image.open(
+                BytesIO(
+                    response.content
+                )
+            ).convert("RGB")
+
+    # --------------------------------------------------------
+    # PIL image
+    # --------------------------------------------------------
+
+    if isinstance(
+        generated,
+        Image.Image
+    ):
+
+        return generated.convert(
+            "RGB"
+        )
+
+    raise RuntimeError(
+        "Qwen returned an unsupported image format."
+    )
 
 
 # ============================================================
@@ -112,106 +498,64 @@ with st.sidebar:
     st.title("⚙️ Studio Controls")
 
     # --------------------------------------------------------
-    # API STATUS
+    # ENGINE STATUS
     # --------------------------------------------------------
 
-    st.subheader("🔑 Gemini API")
+    st.subheader("🧠 AI Engine")
 
-    if GEMINI_API_KEY:
+    st.success(
+        "🟢 Qwen Image Edit"
+    )
 
-        st.success("🟢 Gemini API Connected")
-
-    else:
-
-        st.error(
-            "Gemini API key not found."
-        )
-
-        st.caption(
-            "Add GEMINI_API_KEY to "
-            ".streamlit/secrets.toml"
-        )
+    st.caption(
+        "Free public Hugging Face ZeroGPU Space"
+    )
 
     st.divider()
 
     # --------------------------------------------------------
-    # REFERENCE IMAGES
+    # REFERENCE IMAGE
     # --------------------------------------------------------
 
-    st.subheader("🖼️ Reference Images")
+    st.subheader("🖼️ Reference Image")
 
     uploaded_files = st.file_uploader(
-        "Upload reference images",
+        "Upload your reference image",
         type=[
+            "png",
             "jpg",
             "jpeg",
-            "png",
             "webp"
         ],
         accept_multiple_files=True
     )
 
-    # Gemini 2.5 Flash Image works best with up to 3 images.
     if uploaded_files:
 
-        if len(uploaded_files) > 3:
+        # ----------------------------------------------------
+        # Qwen Space accepts one primary image.
+        # ----------------------------------------------------
 
-            st.warning(
-                "Gemini 2.5 Flash Image works best "
-                "with up to 3 reference images. "
-                "Only the first 3 will be used."
+        if len(uploaded_files) > 1:
+
+            st.info(
+                "For the strongest reference accuracy, "
+                "use ONE primary reference image."
             )
 
-            uploaded_files = uploaded_files[:3]
-
         st.success(
-            f"✅ {len(uploaded_files)} reference image(s)"
+            f"✅ {len(uploaded_files)} image(s) uploaded"
         )
 
-        cols = st.columns(2)
-
-        for index, file in enumerate(
+        for i, file in enumerate(
             uploaded_files
         ):
 
-            with cols[index % 2]:
-
-                st.image(
-                    file,
-                    caption=f"Reference {index + 1}",
-                    use_container_width=True
-                )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # MODEL
-    # --------------------------------------------------------
-
-    st.subheader("🧠 Gemini Image Model")
-
-    model = st.selectbox(
-        "Choose Model",
-        [
-            "gemini-2.5-flash-image",
-            "gemini-3.1-flash-image"
-        ],
-        index=0
-    )
-
-    if model == "gemini-2.5-flash-image":
-
-        st.caption(
-            "Nano Banana — optimized for fast "
-            "image generation and editing."
-        )
-
-    else:
-
-        st.caption(
-            "Nano Banana 2 — higher quality and "
-            "up to 4K output, subject to account access."
-        )
+            st.image(
+                file,
+                caption=f"Reference {i + 1}",
+                use_container_width=True
+            )
 
     st.divider()
 
@@ -219,75 +563,70 @@ with st.sidebar:
     # ASPECT RATIO
     # --------------------------------------------------------
 
-    st.subheader("📐 Image Size")
+    st.subheader("📐 Aspect Ratio")
 
     aspect_ratio = st.selectbox(
-        "Aspect Ratio",
-        [
-            "16:9",
-            "9:16",
-            "1:1",
-            "4:5",
-            "3:4",
-            "4:3",
-            "3:2",
-            "21:9"
-        ],
+        "Image Ratio",
+        list(
+            RATIO_MAP.keys()
+        ),
         index=0
     )
 
     st.caption(
-        f"Output ratio: **{aspect_ratio}**"
+        f"Selected: **{aspect_ratio}**"
     )
 
     st.divider()
 
     # --------------------------------------------------------
-    # RESOLUTION
+    # QUALITY
     # --------------------------------------------------------
 
-    st.subheader("✨ Resolution")
+    st.subheader("✨ Quality")
 
-    if model == "gemini-2.5-flash-image":
+    quality = st.selectbox(
+        "Rendering Quality",
+        [
+            "Ultra realistic fashion photography",
+            "Premium commercial photography",
+            "Luxury editorial photography",
+            "Cinematic photorealism",
+            "Natural realistic photography"
+        ],
+        index=0
+    )
 
-        resolution = "1K"
+    st.divider()
 
-        st.info(
-            "Gemini 2.5 Flash Image outputs "
-            "approximately 1K resolution."
+    # --------------------------------------------------------
+    # REFERENCE STRENGTH
+    # --------------------------------------------------------
+
+    st.subheader("🎯 Reference Priority")
+
+    keep_reference = st.checkbox(
+        "Preserve reference design",
+        value=True
+    )
+
+    if keep_reference:
+
+        st.caption(
+            "The AI will strongly prioritize "
+            "the uploaded reference."
         )
 
     else:
 
-        resolution = st.selectbox(
-            "Output Resolution",
-            [
-                "1K",
-                "2K",
-                "4K"
-            ],
-            index=1
+        st.caption(
+            "The AI has more freedom to redesign."
         )
 
     st.divider()
 
     # --------------------------------------------------------
-    # RANDOM SEED
-    # --------------------------------------------------------
-
-    random_seed = random.randint(
-        1,
-        999999999
-    )
-
-    st.caption(
-        f"🎲 Generation ID: `{random_seed}`"
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # CLEAR CHAT
+    # CLEAR
     # --------------------------------------------------------
 
     if st.button(
@@ -301,224 +640,7 @@ with st.sidebar:
 
 
 # ============================================================
-# GEMINI CLIENT
-# ============================================================
-
-client = None
-
-if GEMINI_API_KEY:
-
-    try:
-
-        client = genai.Client(
-            api_key=GEMINI_API_KEY
-        )
-
-    except Exception as e:
-
-        st.error(
-            f"Gemini client error: {e}"
-        )
-
-
-# ============================================================
-# REFERENCE IMAGE LOADER
-# ============================================================
-
-def load_reference_images(files):
-
-    images = []
-
-    for file in files:
-
-        try:
-
-            image = Image.open(
-                BytesIO(
-                    file.getvalue()
-                )
-            ).convert("RGB")
-
-            images.append(image)
-
-        except Exception as e:
-
-            st.warning(
-                f"Could not read {file.name}: {e}"
-            )
-
-    return images
-
-
-# ============================================================
-# GENERATE IMAGE
-# ============================================================
-
-def generate_image(
-    prompt,
-    reference_images,
-    model,
-    aspect_ratio,
-    resolution
-):
-
-    # --------------------------------------------------------
-    # STRONG REFERENCE INSTRUCTIONS
-    # --------------------------------------------------------
-
-    if reference_images:
-
-        reference_prompt = f"""
-You are an expert commercial fashion image editor.
-
-The uploaded reference image(s) are IMPORTANT VISUAL
-REFERENCES.
-
-Study them carefully before generating the final image.
-
-The user's requested changes should be applied while
-preserving the important visual information from the
-reference image(s).
-
-REFERENCE PRESERVATION PRIORITIES:
-
-1. Dress / clothing design
-2. Exact dress color
-3. Color placement
-4. Garment silhouette
-5. Neckline
-6. Sleeves
-7. Fabric appearance
-8. Embroidery and patterns
-9. Accessories
-10. Overall styling
-11. Important visual details
-
-DO NOT ignore the reference images.
-
-DO NOT invent a completely unrelated dress.
-
-If the user requests a new model, background, pose,
-camera angle or composition, change those elements while
-keeping the requested reference clothing/design
-recognizable.
-
-If the user says to keep the dress color unchanged,
-preserve the original color as accurately as possible.
-
-USER REQUEST:
-
-{prompt}
-
-FINAL IMAGE REQUIREMENTS:
-
-Professional commercial fashion photography,
-photorealistic,
-extremely detailed,
-realistic fabric texture,
-accurate clothing construction,
-natural skin texture,
-professional lighting,
-realistic shadows,
-sharp subject,
-clean composition,
-premium fashion campaign,
-high-end editorial photography.
-
-Create the final image in {aspect_ratio}.
-"""
-
-    else:
-
-        reference_prompt = f"""
-Create a professional photorealistic image based on
-the following request:
-
-{prompt}
-
-Requirements:
-
-Premium commercial photography,
-realistic materials,
-realistic fabric,
-sharp details,
-natural skin,
-professional lighting,
-realistic shadows,
-clean composition,
-high-end editorial fashion photography,
-aspect ratio {aspect_ratio}.
-"""
-
-    # --------------------------------------------------------
-    # CONTENTS
-    # --------------------------------------------------------
-
-    contents = []
-
-    # Put reference images BEFORE the instruction.
-    for image in reference_images:
-
-        contents.append(image)
-
-    contents.append(
-        reference_prompt
-    )
-
-    # --------------------------------------------------------
-    # CONFIG
-    # --------------------------------------------------------
-
-    image_config = {
-        "aspect_ratio": aspect_ratio
-    }
-
-    # Gemini 3 image models support image_size.
-    if model == "gemini-3.1-flash-image":
-
-        image_config["image_size"] = resolution
-
-    config = types.GenerateContentConfig(
-
-        response_modalities=[
-            "IMAGE"
-        ],
-
-        response_format={
-            "image": image_config
-        }
-    )
-
-    # --------------------------------------------------------
-    # GENERATE
-    # --------------------------------------------------------
-
-    response = client.models.generate_content(
-
-        model=model,
-
-        contents=contents,
-
-        config=config
-    )
-
-    # --------------------------------------------------------
-    # FIND IMAGE
-    # --------------------------------------------------------
-
-    for part in response.parts:
-
-        if part.inline_data is not None:
-
-            return part.as_image()
-
-    raise RuntimeError(
-        "Gemini did not return an image."
-    )
-
-
-# ============================================================
-# DISPLAY CHAT HISTORY
+# CHAT HISTORY
 # ============================================================
 
 for message in st.session_state.messages:
@@ -531,7 +653,9 @@ for message in st.session_state.messages:
             message["content"]
         )
 
-        if message.get("image"):
+        if message.get(
+            "image"
+        ) is not None:
 
             st.image(
                 message["image"],
@@ -544,24 +668,24 @@ for message in st.session_state.messages:
 # ============================================================
 
 user_prompt = st.chat_input(
-    "Describe the image you want to create..."
+    "✨ Describe exactly what you want..."
 )
 
 
 # ============================================================
-# GENERATE
+# GENERATION
 # ============================================================
 
 if user_prompt:
 
     # --------------------------------------------------------
-    # API CHECK
+    # REQUIRE REFERENCE
     # --------------------------------------------------------
 
-    if not GEMINI_API_KEY:
+    if not uploaded_files:
 
         st.error(
-            "❌ Gemini API key is missing."
+            "🖼️ Please upload at least ONE reference image."
         )
 
         st.stop()
@@ -595,70 +719,114 @@ if user_prompt:
         try:
 
             with st.spinner(
-                "🔥 Gemini is studying your reference "
-                "and generating the image..."
+                "🔥 Connecting to free Qwen GPU..."
             ):
 
-                reference_images = (
-                    load_reference_images(
-                        uploaded_files
-                        if uploaded_files
-                        else []
+                # ------------------------------------------------
+                # Use FIRST image as primary reference.
+                # ------------------------------------------------
+
+                primary_file = (
+                    uploaded_files[0]
+                )
+
+                # ------------------------------------------------
+                # Prepare image
+                # ------------------------------------------------
+
+                reference_image = (
+                    prepare_reference_image(
+                        primary_file,
+                        aspect_ratio
                     )
                 )
 
-                generated_image = generate_image(
+                # ------------------------------------------------
+                # Save temporary file
+                # ------------------------------------------------
 
-                    prompt=user_prompt,
-
-                    reference_images=
-                        reference_images,
-
-                    model=model,
-
-                    aspect_ratio=
-                        aspect_ratio,
-
-                    resolution=
-                        resolution
+                image_path = (
+                    save_temp_image(
+                        reference_image
+                    )
                 )
 
-            # ------------------------------------------------
-            # RESULT
-            # ------------------------------------------------
+                # ------------------------------------------------
+                # Build prompt
+                # ------------------------------------------------
+
+                final_prompt = build_prompt(
+
+                    user_prompt,
+
+                    aspect_ratio,
+
+                    quality,
+
+                    keep_reference
+                )
+
+            # ----------------------------------------------------
+            # GENERATE
+            # ----------------------------------------------------
+
+            with st.spinner(
+                "🎨 Qwen is studying the reference "
+                "and generating your image..."
+            ):
+
+                result_image = (
+                    generate_with_qwen(
+                        image_path,
+                        final_prompt
+                    )
+                )
+
+            # ----------------------------------------------------
+            # CLEAN TEMP FILE
+            # ----------------------------------------------------
+
+            try:
+
+                os.remove(
+                    image_path
+                )
+
+            except Exception:
+
+                pass
+
+            # ----------------------------------------------------
+            # DISPLAY
+            # ----------------------------------------------------
 
             st.success(
                 "✅ Image generated successfully!"
             )
 
             st.image(
-                generated_image,
+                result_image,
                 caption=(
-                    f"{model} • "
-                    f"{aspect_ratio} • "
-                    f"{resolution}"
+                    f"Qwen Image Edit • "
+                    f"{aspect_ratio}"
                 ),
                 use_container_width=True
             )
 
-            # ------------------------------------------------
-            # CONVERT TO PNG
-            # ------------------------------------------------
+            # ----------------------------------------------------
+            # PNG DOWNLOAD
+            # ----------------------------------------------------
 
-            image_buffer = BytesIO()
+            output = BytesIO()
 
-            generated_image.save(
-                image_buffer,
+            result_image.save(
+                output,
                 format="PNG"
             )
 
             image_bytes = (
-                image_buffer.getvalue()
+                output.getvalue()
             )
-
-            # ------------------------------------------------
-            # DOWNLOAD
-            # ------------------------------------------------
 
             st.download_button(
 
@@ -667,31 +835,32 @@ if user_prompt:
                 data=image_bytes,
 
                 file_name=
-                    "miswars_creators_gemini.png",
+                    "miswars_creators_qwen.png",
 
                 mime="image/png",
 
                 use_container_width=True
             )
 
-            # ------------------------------------------------
+            # ----------------------------------------------------
             # INFO
-            # ------------------------------------------------
+            # ----------------------------------------------------
 
             info = (
-                f"✨ **Generated Successfully**\n\n"
-                f"**Model:** `{model}`  \n"
+                "✨ **Image Generated Successfully**\n\n"
+                f"**Engine:** `Qwen Image Edit`  \n"
                 f"**Aspect Ratio:** `{aspect_ratio}`  \n"
-                f"**Resolution:** `{resolution}`  \n"
-                f"**Reference Images:** "
-                f"`{len(reference_images)}`"
+                f"**Reference:** `Primary reference preserved`  \n"
+                f"**Quality:** `{quality}`"
             )
 
-            st.markdown(info)
+            st.markdown(
+                info
+            )
 
-            # ------------------------------------------------
-            # SAVE
-            # ------------------------------------------------
+            # ----------------------------------------------------
+            # SAVE HISTORY
+            # ----------------------------------------------------
 
             st.session_state.messages.append(
                 {
@@ -702,23 +871,27 @@ if user_prompt:
                         info,
 
                     "image":
-                        generated_image
+                        result_image
                 }
             )
 
         except Exception as e:
 
             st.error(
-                "❌ Gemini image generation failed."
+                "❌ Generation failed."
             )
 
             st.code(
                 str(e)
             )
 
-            st.info(
-                "If the error mentions quota, billing, "
-                "or RESOURCE_EXHAUSTED, your Gemini API "
-                "project does not currently have image "
-                "generation access."
+            st.warning(
+                """
+If the error says the Space is busy, queued,
+GPU unavailable, or quota exceeded, wait a little
+and try again.
+
+This version uses a public free ZeroGPU Space,
+so its free GPU capacity is shared with other users.
+"""
             )
