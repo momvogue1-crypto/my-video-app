@@ -2,7 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 
-# Page Setup
+# Page Setup - Miswar's Creators Theme
 st.set_page_config(
     page_title="Miswar's Creators - Powered by Gemini",
     page_icon="🤖",
@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Clean Light Theme
+# Custom Clean Light Theme (Black & White)
 st.markdown("""
 <style>
     .stApp { background-color: #ffffff !important; color: #111111 !important; }
@@ -77,11 +77,8 @@ if user_prompt := st.chat_input("Ask Gemini anything..."):
                 try:
                     genai.configure(api_key=api_key)
                     
-                    # Updated Model Names with Fallback Support
-                    try:
-                        model = genai.GenerativeModel('gemini-2.5-flash')
-                    except Exception:
-                        model = genai.GenerativeModel('gemini-2.0-flash')
+                    # Official Gemini Model
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     
                     if uploaded_file:
                         img = Image.open(uploaded_file)
