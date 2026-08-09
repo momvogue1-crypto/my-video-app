@@ -2,17 +2,14 @@ import streamlit as st
 from gradio_client import Client, handle_file
 from PIL import Image
 from io import BytesIO
-import requests
 import tempfile
 import os
-import time
 import random
-import re
+import time
 
 
 # ============================================================
 # MISWAR'S CREATORS AI
-# Chat + Vision + Reference Image Editing
 # ============================================================
 
 st.set_page_config(
@@ -24,17 +21,15 @@ st.set_page_config(
 
 
 # ============================================================
-# CONFIG
+# OFFICIAL QWEN SPACES
 # ============================================================
 
-QWEN_IMAGE_SPACE = "Qwen/Qwen-Image-Edit"
-
-# Text/vision Space
-QWEN_CHAT_SPACE = "Qwen/Qwen3-VL-235B-A22B-Instruct"
+CHAT_SPACE = "Qwen/Qwen3-VL-235B-A22B-Instruct-Demo"
+IMAGE_SPACE = "Qwen/Qwen-Image-Edit"
 
 
 # ============================================================
-# CSS
+# PAGE STYLE
 # ============================================================
 
 st.markdown("""
@@ -48,29 +43,22 @@ st.markdown("""
     text-align: center;
     font-size: 42px;
     font-weight: 900;
-    color: #111;
-    margin-top: 5px;
-    margin-bottom: 0;
+    color: #111111;
+    margin-top: 10px;
+    margin-bottom: 0px;
 }
 
 .subtitle {
     text-align: center;
-    color: #666;
+    color: #666666;
     font-size: 16px;
     margin-bottom: 25px;
 }
 
-.status-box {
-    padding: 12px;
-    border-radius: 12px;
-    background: #ffffff;
-    border: 1px solid #e5e5e5;
-}
-
 div.stButton > button {
     width: 100%;
-    border-radius: 12px;
     min-height: 45px;
+    border-radius: 12px;
     font-weight: 700;
 }
 
@@ -95,7 +83,7 @@ st.markdown(
 
 st.markdown(
     '<div class="subtitle">'
-    'Chat • Vision • Reference Image Editing • AI Studio'
+    'AI Chat • Image Understanding • Reference Image Editing'
     '</div>',
     unsafe_allow_html=True
 )
@@ -106,208 +94,303 @@ st.markdown(
 # ============================================================
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {
-            "role": "assistant",
-            "content":
-            "👋 **Welcome to Miswar's Creators AI!**\n\n"
-            "Main normal questions ka answer de sakta hoon, "
-            "uploaded images ko samajh sakta hoon, aur "
-            "reference images ko edit karne mein help kar sakta hoon."
-        }
-    ]
+    st.session_state.messages = []
 
+if "qwen_history" not in st.session_state:
+    st.session_state.qwen_history = []
 
 if "mode" not in st.session_state:
     st.session_state.mode = "AI Chat"
 
 
 # ============================================================
-# HELPERS
+# CLIENTS
 # ============================================================
 
-def image_to_bytes(image):
-    output = BytesIO()
-    image.save(output, format="PNG")
-    return output.getvalue()
+@st.cache_resource(show_spinner=False)
+def get_chat_client():
 
-
-def load_pil_image(uploaded_file):
-    return Image.open(
-        BytesIO(uploaded_file.getvalue())
-    ).convert("RGB")
-
-
-def save_temp_image(image):
-    temp = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".png"
+    return Client(
+        CHAT_SPACE,
+        verbose=False
     )
 
-    image.save(
-        temp.name,
-        format="PNG"
-    )
-
-    temp.close()
-
-    return temp.name
-
-
-# ============================================================
-# QWEN IMAGE CLIENT
-# ============================================================
 
 @st.cache_resource(show_spinner=False)
 def get_image_client():
 
     return Client(
-        QWEN_IMAGE_SPACE,
+        IMAGE_SPACE,
         verbose=False
     )
 
 
 # ============================================================
-# QWEN IMAGE GENERATION
+# IMAGE HELPERS
 # ============================================================
 
-def qwen_image_edit(
-    image_path,
-    prompt
+def open_uploaded_image(uploaded_file):
+
+    return Image.open(
+        BytesIO(
+            uploaded_file.getvalue()
+        )
+    ).convert("RGB")
+
+
+def save_temp_image(image):
+
+    file = tempfile.NamedTemporaryFile(
+        delete=False,
+        suffix=".png"
+    )
+
+    image.save(
+        file.name,
+        format="PNG"
+    )
+
+    file.close()
+
+    return file.name
+
+
+def image_bytes(image):
+
+    buffer = BytesIO()
+
+    image.save(
+        buffer,
+        format="PNG"
+    )
+
+    return buffer.getvalue()
+
+
+# ============================================================
+# QWEN CHAT
+# ============================================================
+
+def qwen_chat(
+    user_text,
+    uploaded_file=None
 ):
 
-    client = get_image_client()
-
-    seed = random.randint(
-        1,
-        2147483647
-    )
+    client = get_chat_client()
 
     # --------------------------------------------------------
-    # IMPORTANT:
-    # Current Qwen Image Edit public Space parameters
+    # Make a temporary image if supplied
     # --------------------------------------------------------
 
-    result = client.predict(
-        handle_file(image_path),
-        prompt,
-        seed,
-        True,
-        4.0,
-        50,
-        True,
-        api_name="/infer"
-    )
+    temp_path = None
+
+    if uploaded_file is not None:
+
+        image = open_uploaded_image(
+            uploaded_file
+        )
+
+        temp_path = save_temp_image(
+            image
+        )
+
+        query = (
+            temp_path,
+        )
+
+    else:
+
+        query = user_text
 
     # --------------------------------------------------------
-    # Extract image
+    # Add user message to Qwen history
+    #
+    # Official Qwen Space uses:
+    # chatbot + task_history
     # --------------------------------------------------------
 
-    generated = result
+    if uploaded_file is not None:
+
+        st.session_state.qwen_history.append(
+            (query, None)
+        )
+
+    else:
+
+        st.session_state.qwen_history.append(
+            (user_text, None)
+        )
+
+    # --------------------------------------------------------
+    # Build chatbot display history
+    # --------------------------------------------------------
+
+    chatbot_history = []
+
+    for q, a in st.session_state.qwen_history:
+
+        if isinstance(
+            q,
+            (tuple, list)
+        ):
+
+            if len(q) > 0:
+
+                chatbot_history.append(
+                    (
+                        (q[0],),
+                        a
+                    )
+                )
+
+        else:
+
+            chatbot_history.append(
+                (
+                    q,
+                    a
+                )
+            )
+
+    # --------------------------------------------------------
+    # Current official endpoint
+    # --------------------------------------------------------
+
+    try:
+
+        job = client.submit(
+            chatbot_history,
+            st.session_state.qwen_history,
+            api_name="/predict"
+        )
+
+        result = job.result()
+
+    except Exception:
+
+        # Fallback to synchronous call
+        result = client.predict(
+            chatbot_history,
+            st.session_state.qwen_history,
+            api_name="/predict"
+        )
+
+    # --------------------------------------------------------
+    # Official Space returns chatbot history
+    # --------------------------------------------------------
 
     if isinstance(
         result,
-        (list, tuple)
-    ):
-        generated = result[0]
-
-    # --------------------------------------------------------
-    # Gradio file path
-    # --------------------------------------------------------
-
-    if isinstance(
-        generated,
-        str
+        list
     ):
 
-        if os.path.exists(generated):
+        if len(result) > 0:
 
-            return Image.open(
-                generated
-            ).convert("RGB")
+            last = result[-1]
 
-        if generated.startswith("http"):
+            if isinstance(
+                last,
+                (tuple, list)
+            ) and len(last) >= 2:
 
-            response = requests.get(
-                generated,
-                timeout=180
+                answer = last[1]
+
+                if answer is None:
+                    answer = ""
+
+                answer = str(
+                    answer
+                )
+
+            else:
+
+                answer = str(
+                    last
+                )
+
+        else:
+
+            answer = ""
+
+    else:
+
+        answer = str(
+            result
+        )
+
+    # --------------------------------------------------------
+    # Update our local Qwen history with answer
+    # --------------------------------------------------------
+
+    if st.session_state.qwen_history:
+
+        old_q, _ = (
+            st.session_state.qwen_history[-1]
+        )
+
+        st.session_state.qwen_history[-1] = (
+            old_q,
+            answer
+        )
+
+    # --------------------------------------------------------
+    # Cleanup
+    # --------------------------------------------------------
+
+    if temp_path:
+
+        try:
+            os.remove(
+                temp_path
             )
+        except:
+            pass
 
-            response.raise_for_status()
-
-            return Image.open(
-                BytesIO(response.content)
-            ).convert("RGB")
-
-    # --------------------------------------------------------
-    # PIL
-    # --------------------------------------------------------
-
-    if isinstance(
-        generated,
-        Image.Image
-    ):
-
-        return generated.convert("RGB")
-
-    raise RuntimeError(
-        "Qwen returned an unsupported result."
-    )
+    return answer
 
 
 # ============================================================
-# BUILD IMAGE PROMPT
+# IMAGE EDIT PROMPT
 # ============================================================
 
-def build_image_prompt(
+def build_edit_prompt(
     user_prompt,
-    aspect_ratio,
-    preserve_reference
+    ratio
 ):
 
-    reference_rules = ""
+    return f"""
+Use the uploaded image as the PRIMARY visual reference.
 
-    if preserve_reference:
+IMPORTANT:
 
-        reference_rules = """
-IMPORTANT REFERENCE IMAGE RULES:
+Preserve the reference image's important visual
+characteristics unless the user specifically asks
+to change them.
 
-The uploaded image is the PRIMARY reference.
+Pay very close attention to:
 
-Study the reference carefully.
-
-Preserve the important visual characteristics,
-especially:
-
-- dress design
-- garment structure
+- clothing design
+- dress structure
 - silhouette
-- exact color
+- exact colors
 - color placement
 - fabric appearance
 - neckline
 - sleeves
 - embroidery
-- print
+- patterns
 - accessories
 - styling
+- person's overall appearance
 
-DO NOT replace the reference outfit with an unrelated
+Do not replace the reference outfit with an unrelated
 random outfit.
 
-If the user requests a different model, pose,
-background, camera angle or environment, change only
-those requested elements.
+If the user requests a new model, pose, background,
+lighting or environment, make those changes while
+preserving the requested clothing/design.
 
-If the user says to keep the dress color unchanged,
-KEEP THE ORIGINAL COLOR.
-
-If the reference contains a complete outfit,
-preserve its design accurately.
-"""
-
-    return f"""
-{reference_rules}
+If the user says KEEP THE DRESS COLOR, preserve it.
 
 USER REQUEST:
 
@@ -315,188 +398,166 @@ USER REQUEST:
 
 COMPOSITION:
 
-Create the final image in {aspect_ratio} aspect ratio.
+Final image aspect ratio: {ratio}
 
 QUALITY:
 
-Ultra realistic professional photography,
-photorealistic human,
+Photorealistic,
+ultra detailed,
 realistic skin,
 realistic hair,
 realistic fabric,
-accurate clothing construction,
-sharp garment details,
+accurate garment construction,
+sharp clothing details,
+professional fashion photography,
+premium editorial photography,
 natural lighting,
 realistic shadows,
-premium fashion campaign photography,
-high-end editorial photography,
-clean professional composition.
+high-end commercial image,
+clean composition.
 
 Do not add unnecessary objects.
-
 Do not change important reference details
-unless specifically requested.
+unless explicitly requested.
 """
 
 
 # ============================================================
-# CHAT / VISION BACKEND
+# QWEN IMAGE EDIT
 # ============================================================
 
-@st.cache_resource(show_spinner=False)
-def get_chat_client():
-
-    return Client(
-        QWEN_CHAT_SPACE,
-        verbose=False
-    )
-
-
-def qwen_chat(
-    prompt,
-    image_file=None
+def qwen_image_edit(
+    uploaded_file,
+    prompt
 ):
 
-    client = get_chat_client()
+    client = get_image_client()
 
-    # --------------------------------------------------------
-    # Prepare optional image
-    # --------------------------------------------------------
-
-    if image_file:
-
-        image_path = save_temp_image(
-            load_pil_image(image_file)
-        )
-
-        # Different public Space versions may expose
-        # different API functions. Try common endpoints.
-        attempts = [
-            "/generate",
-            "/chat",
-            "/predict"
-        ]
-
-        last_error = None
-
-        for endpoint in attempts:
-
-            try:
-
-                result = client.predict(
-                    handle_file(image_path),
-                    prompt,
-                    api_name=endpoint
-                )
-
-                try:
-                    os.remove(image_path)
-                except:
-                    pass
-
-                return extract_text(result)
-
-            except Exception as e:
-
-                last_error = e
-
-        try:
-            os.remove(image_path)
-        except:
-            pass
-
-        raise RuntimeError(
-            f"Vision Space endpoint unavailable: {last_error}"
-        )
-
-    # --------------------------------------------------------
-    # Text only
-    # --------------------------------------------------------
-
-    attempts = [
-        "/generate",
-        "/chat",
-        "/predict"
-    ]
-
-    last_error = None
-
-    for endpoint in attempts:
-
-        try:
-
-            result = client.predict(
-                prompt,
-                api_name=endpoint
-            )
-
-            return extract_text(result)
-
-        except Exception as e:
-
-            last_error = e
-
-    raise RuntimeError(
-        f"Chat Space endpoint unavailable: {last_error}"
+    image = open_uploaded_image(
+        uploaded_file
     )
 
+    temp_path = save_temp_image(
+        image
+    )
 
-# ============================================================
-# EXTRACT TEXT FROM GRADIO RESULT
-# ============================================================
+    try:
 
-def extract_text(result):
+        seed = random.randint(
+            0,
+            2147483647
+        )
 
-    if isinstance(
-        result,
-        str
-    ):
+        # ----------------------------------------------------
+        # CURRENT OFFICIAL QWEN IMAGE EDIT ENDPOINT
+        # ----------------------------------------------------
 
-        return result
+        result = client.predict(
 
-    if isinstance(
-        result,
-        dict
-    ):
+            handle_file(
+                temp_path
+            ),
 
-        for key in [
-            "text",
-            "output",
-            "response",
-            "content"
-        ]:
+            prompt,
 
-            if key in result:
+            seed,
 
-                return str(
-                    result[key]
+            True,
+
+            4.0,
+
+            50,
+
+            True,
+
+            api_name="/infer"
+        )
+
+        # ----------------------------------------------------
+        # Official result:
+        # [image, seed]
+        # ----------------------------------------------------
+
+        if isinstance(
+            result,
+            (list, tuple)
+        ):
+
+            generated = result[0]
+
+        else:
+
+            generated = result
+
+        # ----------------------------------------------------
+        # PIL
+        # ----------------------------------------------------
+
+        if isinstance(
+            generated,
+            Image.Image
+        ):
+
+            return generated.convert(
+                "RGB"
+            )
+
+        # ----------------------------------------------------
+        # File path
+        # ----------------------------------------------------
+
+        if isinstance(
+            generated,
+            str
+        ):
+
+            if os.path.exists(
+                generated
+            ):
+
+                return Image.open(
+                    generated
+                ).convert(
+                    "RGB"
                 )
 
-    if isinstance(
-        result,
-        (list, tuple)
-    ):
+            # ------------------------------------------------
+            # URL
+            # ------------------------------------------------
 
-        for item in result:
-
-            if isinstance(
-                item,
-                str
+            if generated.startswith(
+                "http"
             ):
 
-                return item
+                import requests
 
-            if isinstance(
-                item,
-                dict
-            ):
+                response = requests.get(
+                    generated,
+                    timeout=180
+                )
 
-                text = extract_text(item)
+                response.raise_for_status()
 
-                if text:
-                    return text
+                return Image.open(
+                    BytesIO(
+                        response.content
+                    )
+                ).convert(
+                    "RGB"
+                )
 
-    return str(result)
+        raise RuntimeError(
+            "Qwen Image Edit returned an unexpected result."
+        )
+
+    finally:
+
+        try:
+            os.remove(
+                temp_path
+            )
+        except:
+            pass
 
 
 # ============================================================
@@ -514,13 +575,12 @@ with st.sidebar:
     st.subheader("🤖 AI Mode")
 
     mode = st.radio(
-        "Choose mode",
+        "Choose what you want",
         [
             "AI Chat",
             "Image Understanding",
             "Reference Image Edit"
-        ],
-        index=0
+        ]
     )
 
     st.session_state.mode = mode
@@ -531,14 +591,14 @@ with st.sidebar:
     # IMAGE
     # --------------------------------------------------------
 
-    st.subheader("🖼️ Image")
+    st.subheader("🖼️ Upload Image")
 
     uploaded_files = st.file_uploader(
-        "Upload reference/image",
+        "Upload image",
         type=[
+            "png",
             "jpg",
             "jpeg",
-            "png",
             "webp"
         ],
         accept_multiple_files=True
@@ -547,7 +607,7 @@ with st.sidebar:
     if uploaded_files:
 
         st.success(
-            f"✅ {len(uploaded_files)} image(s)"
+            f"✅ {len(uploaded_files)} image(s) uploaded"
         )
 
         for i, file in enumerate(
@@ -563,7 +623,7 @@ with st.sidebar:
     st.divider()
 
     # --------------------------------------------------------
-    # ASPECT RATIO
+    # RATIO
     # --------------------------------------------------------
 
     st.subheader("📐 Image Ratio")
@@ -606,37 +666,39 @@ with st.sidebar:
 
         st.session_state.messages = []
 
+        st.session_state.qwen_history = []
+
         st.rerun()
 
 
 # ============================================================
-# MODE INFORMATION
+# MODE DESCRIPTION
 # ============================================================
 
 if mode == "AI Chat":
 
     st.info(
-        "💬 Ask anything — writing, ideas, coding, prompts, "
-        "questions, explanations, etc."
+        "💬 Normal AI conversation — ask questions, "
+        "write prompts, SEO, coding, ideas, stories, etc."
     )
 
 elif mode == "Image Understanding":
 
     st.info(
-        "👁️ Upload an image and ask me what is in it, "
-        "describe it, analyze it, or create a prompt from it."
+        "👁️ Upload an image and ask Qwen to describe "
+        "or analyze it."
     )
 
 else:
 
     st.info(
-        "🎨 Upload a reference image and describe exactly "
+        "🎨 Upload a reference image and tell the AI "
         "what you want changed."
     )
 
 
 # ============================================================
-# DISPLAY HISTORY
+# DISPLAY OLD CHAT
 # ============================================================
 
 for message in st.session_state.messages:
@@ -649,7 +711,9 @@ for message in st.session_state.messages:
             message["content"]
         )
 
-        if message.get("image"):
+        if message.get(
+            "image"
+        ) is not None:
 
             st.image(
                 message["image"],
@@ -667,36 +731,39 @@ user_prompt = st.chat_input(
 
 
 # ============================================================
-# PROCESS
+# USER MESSAGE
 # ============================================================
 
 if user_prompt:
 
-    # --------------------------------------------------------
-    # Save user
-    # --------------------------------------------------------
-
     st.session_state.messages.append(
         {
-            "role": "user",
-            "content": user_prompt
+            "role":
+                "user",
+
+            "content":
+                user_prompt
         }
     )
 
-    with st.chat_message("user"):
+    with st.chat_message(
+        "user"
+    ):
 
         st.markdown(
             user_prompt
         )
 
-    # --------------------------------------------------------
-    # Assistant
-    # --------------------------------------------------------
+    # ========================================================
+    # ASSISTANT
+    # ========================================================
 
-    with st.chat_message("assistant"):
+    with st.chat_message(
+        "assistant"
+    ):
 
         # ====================================================
-        # IMAGE EDIT MODE
+        # REFERENCE IMAGE EDIT
         # ====================================================
 
         if mode == "Reference Image Edit":
@@ -704,198 +771,133 @@ if user_prompt:
             if not uploaded_files:
 
                 st.error(
-                    "🖼️ Please upload a reference image first."
+                    "🖼️ Pehle reference image upload karo."
                 )
 
                 st.stop()
 
-            image_path = None
-
             try:
 
                 with st.spinner(
-                    "🎨 Qwen is processing your reference..."
+                    "🎨 Qwen reference image ko process kar raha hai..."
                 ):
 
-                    reference_image = load_pil_image(
-                        uploaded_files[0]
-                    )
-
-                    image_path = save_temp_image(
-                        reference_image
-                    )
-
-                    final_prompt = build_image_prompt(
+                    final_prompt = build_edit_prompt(
                         user_prompt,
-                        aspect_ratio,
-                        preserve_reference
+                        aspect_ratio
                     )
 
-                    result_image = qwen_image_edit(
-                        image_path,
+                    generated_image = qwen_image_edit(
+                        uploaded_files[0],
                         final_prompt
                     )
 
-                # --------------------------------------------
-                # Show
-                # --------------------------------------------
-
                 st.success(
-                    "✅ Image generated!"
+                    "✅ Image ready!"
                 )
 
                 st.image(
-                    result_image,
+                    generated_image,
                     use_container_width=True
-                )
-
-                # --------------------------------------------
-                # Download
-                # --------------------------------------------
-
-                image_bytes = image_to_bytes(
-                    result_image
                 )
 
                 st.download_button(
                     "⬇️ Download Image",
-                    data=image_bytes,
-                    file_name="miswars_creators.png",
+                    data=image_bytes(
+                        generated_image
+                    ),
+                    file_name=
+                        "miswars_creators.png",
                     mime="image/png",
                     use_container_width=True
                 )
 
-                response = (
-                    f"✨ **Image Generated Successfully**\n\n"
-                    f"**Mode:** Reference Image Edit  \n"
-                    f"**Ratio:** {aspect_ratio}"
+                answer = (
+                    "✨ **Image Generated Successfully**\n\n"
+                    f"**Aspect Ratio:** `{aspect_ratio}`\n\n"
+                    "Reference image was used as the primary "
+                    "visual reference."
                 )
 
                 st.markdown(
-                    response
+                    answer
                 )
 
                 st.session_state.messages.append(
                     {
-                        "role": "assistant",
-                        "content": response,
-                        "image": result_image
+                        "role":
+                            "assistant",
+
+                        "content":
+                            answer,
+
+                        "image":
+                            generated_image
                     }
                 )
 
             except Exception as e:
 
                 st.error(
-                    "❌ Image generation could not be completed."
+                    "❌ Image generation failed."
                 )
 
                 st.warning(
-                    "The free Hugging Face GPU may be busy, "
-                    "sleeping, or temporarily unavailable."
+                    "Qwen's free ZeroGPU Space may be busy "
+                    "or temporarily unavailable."
                 )
 
                 st.code(
                     str(e)
                 )
 
-            finally:
-
-                if image_path:
-
-                    try:
-                        os.remove(
-                            image_path
-                        )
-                    except:
-                        pass
-
         # ====================================================
-        # VISION / CHAT
+        # CHAT / IMAGE UNDERSTANDING
         # ====================================================
 
         else:
 
+            image_for_chat = None
+
+            if (
+                mode == "Image Understanding"
+                and uploaded_files
+            ):
+
+                image_for_chat = (
+                    uploaded_files[0]
+                )
+
             try:
 
                 with st.spinner(
-                    "🤖 Thinking..."
+                    "🤖 Qwen soch raha hai..."
                 ):
 
-                    image_for_chat = None
+                    if mode == "Image Understanding":
 
-                    if (
-                        mode == "Image Understanding"
-                        and uploaded_files
-                    ):
+                        if image_for_chat:
 
-                        image_for_chat = (
-                            uploaded_files[0]
-                        )
-
-                    # ----------------------------------------
-                    # Context
-                    # ----------------------------------------
-
-                    conversation_context = ""
-
-                    recent_messages = (
-                        st.session_state.messages[-8:]
-                    )
-
-                    for msg in recent_messages:
-
-                        if msg["role"] in [
-                            "user",
-                            "assistant"
-                        ]:
-
-                            conversation_context += (
-                                f"\n{msg['role'].upper()}: "
-                                f"{msg['content']}"
+                            chat_prompt = (
+                                "Carefully analyze the uploaded image. "
+                                "Describe what you see accurately. "
+                                "Pay attention to clothing, colors, "
+                                "people, objects, background, pose, "
+                                "composition and important visual details. "
+                                "Then answer the user's request:\n\n"
+                                + user_prompt
                             )
 
-                    system_instruction = """
-You are Miswar's Creators AI.
+                        else:
 
-Be helpful, natural, intelligent and conversational.
+                            chat_prompt = user_prompt
 
-You can help with:
+                    else:
 
-- general questions
-- writing
-- rewriting
-- translations
-- YouTube content
-- SEO
-- fashion prompts
-- image prompts
-- coding
-- explanations
-- brainstorming
-- image analysis
-- creative ideas
-
-When the user uploads an image, carefully analyze it.
-
-When the user asks for an image-generation prompt,
-create a detailed professional prompt.
-
-Respond naturally and clearly.
-
-Do not claim that you generated an image unless the
-image-generation mode actually generated one.
-"""
-
-                    final_chat_prompt = (
-                        system_instruction
-                        + "\n\nCONVERSATION:"
-                        + conversation_context
-                        + "\n\nCURRENT USER:"
-                        + user_prompt
-                    )
+                        chat_prompt = user_prompt
 
                     answer = qwen_chat(
-                        final_chat_prompt,
+                        chat_prompt,
                         image_for_chat
                     )
 
@@ -916,12 +918,12 @@ image-generation mode actually generated one.
             except Exception as e:
 
                 st.error(
-                    "❌ AI chat service is temporarily unavailable."
+                    "❌ Qwen chat temporarily unavailable."
                 )
 
                 st.warning(
-                    "The public Hugging Face Space may be "
-                    "sleeping, busy, or its API may have changed."
+                    "The public Qwen Space may be busy, "
+                    "sleeping, or rate-limited."
                 )
 
                 st.code(
