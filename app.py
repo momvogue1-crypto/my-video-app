@@ -1,5 +1,5 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 
 # Page Setup - Miswar's Creators Theme
@@ -75,26 +75,26 @@ if user_prompt := st.chat_input("Ask Gemini anything..."):
         with st.chat_message("assistant"):
             with st.spinner("Gemini is thinking..."):
                 try:
-                    # Configure API Key
-                    genai.configure(api_key=api_key)
-                    
-                    # Direct Gemini 1.5 Flash Model
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    # Initialize New Google GenAI Client
+                    client = genai.Client(api_key=api_key)
                     
                     if uploaded_file:
                         img = Image.open(uploaded_file)
-                        response = model.generate_content([user_prompt, img])
+                        response = client.models.generate_content(
+                            model='gemini-2.0-flash',
+                            contents=[user_prompt, img]
+                        )
                     else:
-                        response = model.generate_content(user_prompt)
+                        response = client.models.generate_content(
+                            model='gemini-2.0-flash',
+                            contents=user_prompt
+                        )
 
-                    # Ensure unicode text formatting
-                    clean_response = response.text.encode("utf-8", "ignore").decode("utf-8")
-                    
-                    st.markdown(clean_response)
+                    st.markdown(response.text)
                     
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": clean_response
+                        "content": response.text
                     })
                 except Exception as e:
                     st.error(f"Error: {e}")
