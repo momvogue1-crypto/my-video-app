@@ -2,92 +2,82 @@ import streamlit as st
 import urllib.parse
 import requests
 
-# VIP Page Configuration
-st.set_page_config(page_title="VIP AI Studio - Miswar Ilyas", page_icon="🎨", layout="wide")
+# Page Configuration - Miswar's Creators VIP Theme
+st.set_page_config(
+    page_title="Miswar's Creators - AI Studio",
+    page_icon="🎨",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Custom Stylish CSS for VIP Look & Classy Headers
+# Custom Styling to mimic ChatGPT Dark Mode with VIP Classy Aesthetics
 st.markdown("""
 <style>
-    /* Dark Theme Styles */
+    /* Main Background */
     .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-        color: #f8fafc;
+        background-color: #212121;
+        color: #ececec;
     }
     
-    /* Elegant Classy VIP Header */
-    .vip-header {
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #171717 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    /* Header Area */
+    .chatgpt-header {
         text-align: center;
-        padding: 25px 0;
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(10px);
-        border-radius: 16px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-bottom: 25px;
-        box-shadow: 0px 4px 15px rgba(0,0,0,0.5);
+        padding: 15px 0 5px 0;
+        margin-bottom: 20px;
     }
     .main-title {
-        font-size: 3rem;
+        font-size: 2.8rem;
         font-weight: 800;
         background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        letter-spacing: 1px;
+    }
+    .owner-tag {
+        font-family: 'Georgia', serif;
+        font-style: italic;
+        color: #9b9b9b;
+        font-size: 1.2rem;
+        margin-top: -5px;
+    }
+    .owner-name {
+        font-weight: bold;
+        color: #e2e8f0;
+        letter-spacing: 0.5px;
     }
     
-    /* Stylish Owner Signature */
-    .owner-stylish {
-        text-align: center;
-        margin-bottom: 30px;
-    }
-    .stylish-tagline {
-        font-family: 'Times New Roman', serif;
-        font-style: italic;
-        color: #f8fafc;
-        font-size: 1.5rem;
-    }
-    .stylish-owner {
-        font-weight: bold;
-        font-family: 'Times New Roman', serif;
-        color: #e2e8f0;
-        font-size: 1.8rem;
-        margin-top: 5px;
-    }
-
-    /* Input & Control Section Design */
-    section[data-testid="stSidebar"] {
-        background-color: #0b0f19 !important;
-        border-right: 1px solid rgba(255, 255, 255, 0.1);
+    /* Input Box styling like ChatGPT */
+    div[data-testid="stChatInput"] {
+        border-radius: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Main VIP Classy Header
+# Main Header - Branding & Signature
 st.markdown("""
-<div class="vip-header">
-    <div class="main-title">VIP AI Ultra HD Image Generator</div>
+<div class="chatgpt-header">
+    <div class="main-title">Miswar's Creators</div>
+    <div class="owner-tag">Designed by <span class="owner-name">Miswar Ilyas</span> (Classy Owner)</div>
 </div>
 """, unsafe_allow_html=True)
 
-# Stylish & Classy Owner Signature Section
-st.markdown("""
-<div class="owner-stylish">
-    <div class="stylish-tagline">"Miswar Ilyas"</div>
-    <div class="stylish-owner">Classy Owner - The Web</div>
-</div>
-""", unsafe_allow_html=True)
-
-# Generate Section
-col1, col2 = st.columns([1, 1.5], gap="large")
-
-with col1:
-    st.header("⚙️ Configuration")
+# Sidebar Options
+with st.sidebar:
+    st.title("⚙️ Studio Controls")
     
-    # Text input for image description
-    prompt_input = st.text_area("Describe your image prompt...", height=150, placeholder="Example: Cinematic portrait of a celestial queen with glowing energy, photorealistic, 8k, extremely detailed")
+    # Aspect Ratio Functionality
+    aspect_ratio_label = st.selectbox(
+        "📐 Image Size Ratio",
+        ["16:9 (Landscape)", "9:16 (Portrait)", "1:1 (Square)", "4:5 (Instagram)", "3:4 (Vertical)"]
+    )
     
-    # Aspect Ratio Selection
-    aspect_ratio_label = st.selectbox("Select Size Ratio", ["16:9 (Landscape)", "9:16 (Portrait)", "1:1 (Square)", "4:5 (Instagram)", "3:4 (Vertical)"])
-    
-    # Image Size Mapping (approx. pixels based on ratio)
+    # Map ratios to resolution pixels
     size_mapping = {
         "16:9 (Landscape)": (1920, 1080),
         "9:16 (Portrait)": (1080, 1920),
@@ -96,30 +86,49 @@ with col1:
         "3:4 (Vertical)": (1080, 1440)
     }
     
-    selected_width, selected_height = size_mapping[aspect_ratio_label]
+    width, height = size_mapping[aspect_ratio_label]
     
-    if st.button("🚀 Generate VIP HD Image"):
-        if not prompt_input:
-            st.warning("Please enter a prompt first!")
-        else:
-            with st.spinner("Generating your Ultra HD Image..."):
-                # URL Encode prompt & configuration
-                encoded_prompt = urllib.parse.quote(prompt_input)
-                
-                # Free high-speed render engine (Flux-based, high detail)
-                image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={selected_width}&height={selected_height}&nologo=true&seed=42"
-                
-                # Check image existence (simulate success, handles some API cases)
-                response = requests.get(image_url)
-                if response.status_code == 200:
-                    st.session_state.last_generated_image_url = image_url
-                    st.success("✅ Ultra HD Image Ready!")
-                else:
-                    st.error("There was an issue generating the image. Please try again.")
+    st.divider()
+    
+    # Clear Chat Memory Button
+    if st.button("🗑️ Clear Chat", type="secondary", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
 
-# Output Section
-with col2:
-    st.header("🖼️ Output")
-    
-    if 'last_generated_image_url' in st.session_state:
-        st.image(st.session_state.last_generated_image_url, use_container_width=True)
+# Initialize Chat Memory
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main aapka AI Image Creator hoon. ChatGPT ki tarah apna koi bhi idea likhein, main Ultra HD image generate kar dunga!"}
+    ]
+
+# Display Existing Chat Messages (ChatGPT Style)
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if "img_url" in message:
+            st.image(message["img_url"], use_container_width=True)
+
+# ChatGPT-style Chat Input Bar at Bottom
+if user_prompt := st.chat_input("Ask Miswar's Creators to create an image..."):
+    # Append user prompt
+    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
+
+    # Generate Image Response
+    with st.chat_message("assistant"):
+        with st.spinner("Miswar's Creators Engine is generating your Ultra HD image..."):
+            encoded_prompt = urllib.parse.quote(user_prompt)
+            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&nologo=true&seed=42"
+            
+            response_text = f"✨ **Here is your Ultra HD Image!**\n\n**Ratio:** `{aspect_ratio_label}`"
+            
+            st.markdown(response_text)
+            st.image(image_url, use_container_width=True)
+            
+            # Save to conversation history
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response_text,
+                "img_url": image_url
+            })
