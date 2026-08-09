@@ -1,16 +1,16 @@
 import streamlit as st
-from google import genai
+import google.generativeai as genai
 from PIL import Image
 
-# Page Setup - Miswar's Creators Theme
+# Page Configuration
 st.set_page_config(
-    page_title="Miswar's Creators - Powered by Gemini",
+    page_title="Miswar's Creators",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom Clean Light Theme
+# Custom Styling (Clean Light Theme)
 st.markdown("""
 <style>
     .stApp { background-color: #ffffff !important; color: #111111 !important; }
@@ -29,16 +29,12 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar Options
+# Sidebar
 with st.sidebar:
     st.title("⚙️ Gemini Settings")
-    
-    # Enter API Key
     api_key = st.text_input("🔑 Enter Gemini API Key:", type="password")
     
     st.divider()
-    
-    # Image Upload
     st.subheader("🖼️ Upload Image (Optional)")
     uploaded_file = st.file_uploader("Image upload karke kuch bhi pochein:", type=["jpg", "jpeg", "png"])
     
@@ -47,21 +43,20 @@ with st.sidebar:
         st.image(img, caption="Attached Image", use_container_width=True)
     
     st.divider()
-    
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# Initialize Chat Memory
+# Memory Setup
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main Google Gemini AI se powered hoon. Aap mujh se koi bhi sawal pooch sakte hain ya image upload karke uske bare mein jaan sakte hain."}
     ]
 
-# Display Messages
+# Display Previous Chat
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        st.write(message["content"])
 
 # User Chat Input
 if user_prompt := st.chat_input("Ask Gemini anything..."):
@@ -70,31 +65,33 @@ if user_prompt := st.chat_input("Ask Gemini anything..."):
     else:
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
-            st.markdown(user_prompt)
+            st.write(user_prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Gemini is thinking..."):
-                try:
-                    # Initialize New Google GenAI Client
-                    client = genai.Client(api_key=api_key)
-                    
-                    if uploaded_file:
-                        img = Image.open(uploaded_file)
-                        response = client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=[user_prompt, img]
-                        )
-                    else:
-                        response = client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=user_prompt
-                        )
+            try:
+                genai.configure(api_key=api_key)
+                
+                # Gemini 1.5 Flash Model
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                
+                if uploaded_file:
+                    img = Image.open(uploaded_file)
+                    response = model.generate_content([user_prompt, img], stream=True)
+                else:
+                    response = model.generate_content(user_prompt, stream=True)
 
-                    st.markdown(response.text)
-                    
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": response.text
-                    })
-                except Exception as e:
-                    st.error(f"Error: {e}")
+                # Stream response word-by-word to avoid encoding crashes
+                def stream_preview():
+                    for chunk in response:
+                        if chunk.text:
+                            yield chunk.text
+
+                full_response = st.write_stream(stream_preview)
+                
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": full_response
+                })
+
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
