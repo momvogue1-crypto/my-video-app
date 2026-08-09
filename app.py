@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling (Clean UI)
+# Custom Styling
 st.markdown("""
 <style>
     .stApp { background-color: #ffffff !important; color: #111111 !important; }
@@ -58,27 +58,25 @@ if user_prompt := st.chat_input("Ask Gemini anything..."):
     if not api_key:
         st.error("⚠️ Pehle Sidebar mein apni Gemini API Key enter karein!")
     else:
-        # User input display
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
             st.markdown(user_prompt)
 
-        # Assistant response logic
         with st.chat_message("assistant"):
             with st.spinner("Miswar's AI is thinking..."):
                 try:
-                    # Direct client call with new SDK
                     client = genai.Client(api_key=api_key)
                     
+                    # Using gemini-1.5-flash for free tier stability
                     if uploaded_file:
                         img = Image.open(uploaded_file)
                         response = client.models.generate_content(
-                            model='gemini-2.5-flash',
+                            model='gemini-1.5-flash',
                             contents=[user_prompt, img]
                         )
                     else:
                         response = client.models.generate_content(
-                            model='gemini-2.5-flash',
+                            model='gemini-1.5-flash',
                             contents=user_prompt
                         )
 
@@ -86,14 +84,8 @@ if user_prompt := st.chat_input("Ask Gemini anything..."):
                     st.session_state.messages.append({"role": "assistant", "content": response.text})
 
                 except Exception as e:
-                    # Fallback to standard fast model if 2.5 is unavailable
-                    try:
-                        client = genai.Client(api_key=api_key)
-                        response = client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=user_prompt
-                        )
-                        st.markdown(response.text)
-                        st.session_state.messages.append({"role": "assistant", "content": response.text})
-                    except Exception as err:
-                        st.error(f"Error: {err}")
+                    err_msg = str(e)
+                    if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                        st.error("⏳ Google API Limit Hit ho gayi hai! 30-40 seconds ruk kar dobara try karein ya Google AI Studio se NAYI API KEY banayein.")
+                    else:
+                        st.error(f"Error: {err_msg}")
