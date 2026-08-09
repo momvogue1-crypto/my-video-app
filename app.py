@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Clean Light Theme (Black & White)
+# Custom Clean Light Theme
 st.markdown("""
 <style>
     .stApp { background-color: #ffffff !important; color: #111111 !important; }
@@ -38,7 +38,7 @@ with st.sidebar:
     
     st.divider()
     
-    # Image Upload (Vision Input)
+    # Image Upload
     st.subheader("🖼️ Upload Image (Optional)")
     uploaded_file = st.file_uploader("Image upload karke kuch bhi pochein:", type=["jpg", "jpeg", "png"])
     
@@ -52,45 +52,45 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# Initialize Chat
+# Initialize Chat Memory
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main Google Gemini AI se powered hoon. Aap mujh se koi bhi sawal pooch sakte hain ya image upload karke uske bare mein jaan sakte hain."}
     ]
 
-# Display Existing Chat Messages
+# Display Messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# User Input
+# User Chat Input
 if user_prompt := st.chat_input("Ask Gemini anything..."):
     if not api_key:
         st.error("⚠️ Pehle Sidebar mein apni Gemini API Key daalein!")
     else:
-        # Display User Message
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
             st.markdown(user_prompt)
 
-        # Generate Response using Gemini
         with st.chat_message("assistant"):
             with st.spinner("Gemini is thinking..."):
                 try:
                     genai.configure(api_key=api_key)
                     
-                    # Choose model: if image uploaded, use vision multimodal
+                    # Updated Model Names with Fallback Support
+                    try:
+                        model = genai.GenerativeModel('gemini-2.5-flash')
+                    except Exception:
+                        model = genai.GenerativeModel('gemini-2.0-flash')
+                    
                     if uploaded_file:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
                         img = Image.open(uploaded_file)
                         response = model.generate_content([user_prompt, img])
                     else:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
                         response = model.generate_content(user_prompt)
 
                     st.markdown(response.text)
                     
-                    # Save to chat history
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": response.text
