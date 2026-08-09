@@ -1,15 +1,15 @@
 import streamlit as st
-from gradio_client import Client, handle_file
+from openai import OpenAI
 from PIL import Image
 from io import BytesIO
-import tempfile
+import base64
 import os
-import random
-import time
 
 
 # ============================================================
 # MISWAR'S CREATORS AI
+# OPENAI VERSION
+# Chat + Vision + Image Generation + Image Editing
 # ============================================================
 
 st.set_page_config(
@@ -21,15 +21,34 @@ st.set_page_config(
 
 
 # ============================================================
-# OFFICIAL QWEN SPACES
+# OPENAI CLIENT
 # ============================================================
 
-CHAT_SPACE = "Qwen/Qwen3-VL-235B-A22B-Instruct-Demo"
-IMAGE_SPACE = "Qwen/Qwen-Image-Edit"
+def get_api_key():
+
+    # Streamlit Secrets
+    try:
+        if "OPENAI_API_KEY" in st.secrets:
+            return st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        pass
+
+    # Environment variable
+    key = os.getenv("OPENAI_API_KEY")
+
+    return key
+
+
+API_KEY = get_api_key()
+
+if API_KEY:
+    client = OpenAI(api_key=API_KEY)
+else:
+    client = None
 
 
 # ============================================================
-# PAGE STYLE
+# PAGE CSS
 # ============================================================
 
 st.markdown("""
@@ -83,7 +102,7 @@ st.markdown(
 
 st.markdown(
     '<div class="subtitle">'
-    'AI Chat • Image Understanding • Reference Image Editing'
+    'Powered by OpenAI • Chat • Vision • Image Creation'
     '</div>',
     unsafe_allow_html=True
 )
@@ -96,40 +115,15 @@ st.markdown(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "qwen_history" not in st.session_state:
-    st.session_state.qwen_history = []
-
 if "mode" not in st.session_state:
     st.session_state.mode = "AI Chat"
-
-
-# ============================================================
-# CLIENTS
-# ============================================================
-
-@st.cache_resource(show_spinner=False)
-def get_chat_client():
-
-    return Client(
-        CHAT_SPACE,
-        verbose=False
-    )
-
-
-@st.cache_resource(show_spinner=False)
-def get_image_client():
-
-    return Client(
-        IMAGE_SPACE,
-        verbose=False
-    )
 
 
 # ============================================================
 # IMAGE HELPERS
 # ============================================================
 
-def open_uploaded_image(uploaded_file):
+def load_image(uploaded_file):
 
     return Image.open(
         BytesIO(
@@ -138,24 +132,7 @@ def open_uploaded_image(uploaded_file):
     ).convert("RGB")
 
 
-def save_temp_image(image):
-
-    file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".png"
-    )
-
-    image.save(
-        file.name,
-        format="PNG"
-    )
-
-    file.close()
-
-    return file.name
-
-
-def image_bytes(image):
+def image_to_bytes(image):
 
     buffer = BytesIO()
 
@@ -167,397 +144,318 @@ def image_bytes(image):
     return buffer.getvalue()
 
 
+def image_to_data_url(uploaded_file):
+
+    data = uploaded_file.getvalue()
+
+    mime = uploaded_file.type or "image/png"
+
+    encoded = base64.b64encode(
+        data
+    ).decode("utf-8")
+
+    return f"data:{mime};base64,{encoded}"
+
+
 # ============================================================
-# QWEN CHAT
+# ASPECT RATIO → OPENAI SIZE
 # ============================================================
 
-def qwen_chat(
-    user_text,
+def get_image_size(ratio):
+
+    # GPT Image uses supported output sizes.
+    # We map user's ratio to closest supported landscape,
+    # portrait or square format.
+
+    if ratio == "16:9":
+        return "1536x1024"
+
+    if ratio == "9:16":
+        return "1024x1536"
+
+    if ratio == "4:5":
+        return "1024x1536"
+
+    if ratio == "3:4":
+        return "1024x1536"
+
+    if ratio == "2:3":
+        return "1024x1536"
+
+    if ratio == "4:3":
+        return "1536x1024"
+
+    if ratio == "3:2":
+        return "1536x1024"
+
+    return "1024x1024"
+
+
+# ============================================================
+# SYSTEM INSTRUCTION
+# ============================================================
+
+SYSTEM_INSTRUCTION = """
+You are Miswar's Creators AI.
+
+You are a highly capable creative assistant.
+
+Help the user with:
+
+- normal conversation
+- questions and answers
+- writing
+- rewriting
+- translation
+- YouTube content
+- SEO
+- titles
+- descriptions
+- tags
+- fashion content
+- image prompts
+- creative ideas
+- coding
+- explanations
+- brainstorming
+- image analysis
+
+Be friendly, direct and useful.
+
+When the user uploads an image:
+carefully analyze the image and answer based on what
+is actually visible.
+
+When the user asks for an image prompt:
+write a detailed professional prompt.
+
+Do not claim that an image was generated unless
+the image generation function actually generated it.
+"""
+
+
+# ============================================================
+# CHAT FUNCTION
+# ============================================================
+
+def ask_openai(
+    prompt,
     uploaded_file=None
 ):
 
-    client = get_chat_client()
+    if client is None:
 
-    # --------------------------------------------------------
-    # Make a temporary image if supplied
-    # --------------------------------------------------------
+        raise RuntimeError(
+            "OPENAI_API_KEY is not configured."
+        )
 
-    temp_path = None
+    content = []
+
+    content.append(
+        {
+            "type": "input_text",
+            "text": prompt
+        }
+    )
 
     if uploaded_file is not None:
 
-        image = open_uploaded_image(
+        image_url = image_to_data_url(
             uploaded_file
         )
 
-        temp_path = save_temp_image(
-            image
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": image_url
+            }
         )
 
-        query = (
-            temp_path,
-        )
+    response = client.responses.create(
 
-    else:
+        model="gpt-5",
 
-        query = user_text
+        instructions=SYSTEM_INSTRUCTION,
 
-    # --------------------------------------------------------
-    # Add user message to Qwen history
-    #
-    # Official Qwen Space uses:
-    # chatbot + task_history
-    # --------------------------------------------------------
+        input=[
+            {
+                "role": "user",
+                "content": content
+            }
+        ]
+    )
 
-    if uploaded_file is not None:
-
-        st.session_state.qwen_history.append(
-            (query, None)
-        )
-
-    else:
-
-        st.session_state.qwen_history.append(
-            (user_text, None)
-        )
-
-    # --------------------------------------------------------
-    # Build chatbot display history
-    # --------------------------------------------------------
-
-    chatbot_history = []
-
-    for q, a in st.session_state.qwen_history:
-
-        if isinstance(
-            q,
-            (tuple, list)
-        ):
-
-            if len(q) > 0:
-
-                chatbot_history.append(
-                    (
-                        (q[0],),
-                        a
-                    )
-                )
-
-        else:
-
-            chatbot_history.append(
-                (
-                    q,
-                    a
-                )
-            )
-
-    # --------------------------------------------------------
-    # Current official endpoint
-    # --------------------------------------------------------
-
-    try:
-
-        job = client.submit(
-            chatbot_history,
-            st.session_state.qwen_history,
-            api_name="/predict"
-        )
-
-        result = job.result()
-
-    except Exception:
-
-        # Fallback to synchronous call
-        result = client.predict(
-            chatbot_history,
-            st.session_state.qwen_history,
-            api_name="/predict"
-        )
-
-    # --------------------------------------------------------
-    # Official Space returns chatbot history
-    # --------------------------------------------------------
-
-    if isinstance(
-        result,
-        list
-    ):
-
-        if len(result) > 0:
-
-            last = result[-1]
-
-            if isinstance(
-                last,
-                (tuple, list)
-            ) and len(last) >= 2:
-
-                answer = last[1]
-
-                if answer is None:
-                    answer = ""
-
-                answer = str(
-                    answer
-                )
-
-            else:
-
-                answer = str(
-                    last
-                )
-
-        else:
-
-            answer = ""
-
-    else:
-
-        answer = str(
-            result
-        )
-
-    # --------------------------------------------------------
-    # Update our local Qwen history with answer
-    # --------------------------------------------------------
-
-    if st.session_state.qwen_history:
-
-        old_q, _ = (
-            st.session_state.qwen_history[-1]
-        )
-
-        st.session_state.qwen_history[-1] = (
-            old_q,
-            answer
-        )
-
-    # --------------------------------------------------------
-    # Cleanup
-    # --------------------------------------------------------
-
-    if temp_path:
-
-        try:
-            os.remove(
-                temp_path
-            )
-        except:
-            pass
-
-    return answer
+    return response.output_text
 
 
 # ============================================================
-# IMAGE EDIT PROMPT
+# IMAGE GENERATION
 # ============================================================
 
-def build_edit_prompt(
-    user_prompt,
+def generate_image(
+    prompt,
     ratio
 ):
 
-    return f"""
-Use the uploaded image as the PRIMARY visual reference.
+    if client is None:
 
-IMPORTANT:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not configured."
+        )
 
-Preserve the reference image's important visual
-characteristics unless the user specifically asks
-to change them.
+    size = get_image_size(
+        ratio
+    )
 
-Pay very close attention to:
+    final_prompt = f"""
+Create a professional high-quality image.
 
-- clothing design
-- dress structure
+USER REQUEST:
+{prompt}
+
+ASPECT RATIO:
+{ratio}
+
+QUALITY REQUIREMENTS:
+
+Photorealistic,
+ultra detailed,
+professional photography,
+realistic skin,
+realistic hair,
+realistic fabric,
+accurate clothing construction,
+sharp details,
+natural lighting,
+realistic shadows,
+premium commercial photography,
+high-end editorial quality,
+clean composition.
+
+Do not add unnecessary objects.
+Follow the user's request exactly.
+"""
+
+    result = client.images.generate(
+
+        model="gpt-image-1",
+
+        prompt=final_prompt,
+
+        size=size,
+
+        quality="high"
+    )
+
+    image_base64 = (
+        result.data[0].b64_json
+    )
+
+    image_bytes_data = base64.b64decode(
+        image_base64
+    )
+
+    return Image.open(
+        BytesIO(
+            image_bytes_data
+        )
+    ).convert("RGB")
+
+
+# ============================================================
+# IMAGE EDITING
+# ============================================================
+
+def edit_image(
+    uploaded_file,
+    prompt,
+    ratio
+):
+
+    if client is None:
+
+        raise RuntimeError(
+            "OPENAI_API_KEY is not configured."
+        )
+
+    size = get_image_size(
+        ratio
+    )
+
+    image_bytes_data = uploaded_file.getvalue()
+
+    # --------------------------------------------------------
+    # Preserve original reference
+    # --------------------------------------------------------
+
+    final_prompt = f"""
+Use the uploaded image as the PRIMARY REFERENCE.
+
+USER REQUEST:
+
+{prompt}
+
+REFERENCE PRESERVATION:
+
+Preserve the important details of the reference
+unless the user explicitly requests a change.
+
+Pay special attention to:
+
+- exact dress design
+- garment structure
 - silhouette
-- exact colors
+- original colors
 - color placement
-- fabric appearance
+- fabric
 - neckline
 - sleeves
 - embroidery
 - patterns
 - accessories
 - styling
-- person's overall appearance
 
-Do not replace the reference outfit with an unrelated
-random outfit.
+If the user says to keep the dress color,
+DO NOT change the dress color.
 
-If the user requests a new model, pose, background,
-lighting or environment, make those changes while
-preserving the requested clothing/design.
+If the user requests a different model,
+change the model but preserve the requested outfit.
 
-If the user says KEEP THE DRESS COLOR, preserve it.
+If the user requests a different background,
+change the background while preserving the subject.
 
-USER REQUEST:
+If the user requests a different pose,
+change only the pose while preserving the outfit.
 
-{user_prompt}
-
-COMPOSITION:
-
-Final image aspect ratio: {ratio}
-
-QUALITY:
-
-Photorealistic,
-ultra detailed,
-realistic skin,
-realistic hair,
-realistic fabric,
-accurate garment construction,
-sharp clothing details,
-professional fashion photography,
-premium editorial photography,
-natural lighting,
-realistic shadows,
-high-end commercial image,
-clean composition.
-
-Do not add unnecessary objects.
-Do not change important reference details
-unless explicitly requested.
+Create a realistic professional final image.
 """
 
+    result = client.images.edit(
 
-# ============================================================
-# QWEN IMAGE EDIT
-# ============================================================
+        model="gpt-image-1",
 
-def qwen_image_edit(
-    uploaded_file,
-    prompt
-):
+        image=BytesIO(
+            image_bytes_data
+        ),
 
-    client = get_image_client()
+        prompt=final_prompt,
 
-    image = open_uploaded_image(
-        uploaded_file
+        size=size
     )
 
-    temp_path = save_temp_image(
-        image
+    image_base64 = (
+        result.data[0].b64_json
     )
 
-    try:
+    decoded = base64.b64decode(
+        image_base64
+    )
 
-        seed = random.randint(
-            0,
-            2147483647
+    return Image.open(
+        BytesIO(
+            decoded
         )
-
-        # ----------------------------------------------------
-        # CURRENT OFFICIAL QWEN IMAGE EDIT ENDPOINT
-        # ----------------------------------------------------
-
-        result = client.predict(
-
-            handle_file(
-                temp_path
-            ),
-
-            prompt,
-
-            seed,
-
-            True,
-
-            4.0,
-
-            50,
-
-            True,
-
-            api_name="/infer"
-        )
-
-        # ----------------------------------------------------
-        # Official result:
-        # [image, seed]
-        # ----------------------------------------------------
-
-        if isinstance(
-            result,
-            (list, tuple)
-        ):
-
-            generated = result[0]
-
-        else:
-
-            generated = result
-
-        # ----------------------------------------------------
-        # PIL
-        # ----------------------------------------------------
-
-        if isinstance(
-            generated,
-            Image.Image
-        ):
-
-            return generated.convert(
-                "RGB"
-            )
-
-        # ----------------------------------------------------
-        # File path
-        # ----------------------------------------------------
-
-        if isinstance(
-            generated,
-            str
-        ):
-
-            if os.path.exists(
-                generated
-            ):
-
-                return Image.open(
-                    generated
-                ).convert(
-                    "RGB"
-                )
-
-            # ------------------------------------------------
-            # URL
-            # ------------------------------------------------
-
-            if generated.startswith(
-                "http"
-            ):
-
-                import requests
-
-                response = requests.get(
-                    generated,
-                    timeout=180
-                )
-
-                response.raise_for_status()
-
-                return Image.open(
-                    BytesIO(
-                        response.content
-                    )
-                ).convert(
-                    "RGB"
-                )
-
-        raise RuntimeError(
-            "Qwen Image Edit returned an unexpected result."
-        )
-
-    finally:
-
-        try:
-            os.remove(
-                temp_path
-            )
-        except:
-            pass
+    ).convert("RGB")
 
 
 # ============================================================
@@ -569,16 +467,39 @@ with st.sidebar:
     st.title("⚙️ Studio Controls")
 
     # --------------------------------------------------------
+    # API STATUS
+    # --------------------------------------------------------
+
+    if API_KEY:
+
+        st.success(
+            "🟢 OpenAI API Connected"
+        )
+
+    else:
+
+        st.error(
+            "🔴 OpenAI API Key Missing"
+        )
+
+        st.caption(
+            "Add OPENAI_API_KEY in Streamlit Secrets."
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
     # MODE
     # --------------------------------------------------------
 
     st.subheader("🤖 AI Mode")
 
     mode = st.radio(
-        "Choose what you want",
+        "Choose mode",
         [
             "AI Chat",
             "Image Understanding",
+            "Image Generation",
             "Reference Image Edit"
         ]
     )
@@ -588,10 +509,10 @@ with st.sidebar:
     st.divider()
 
     # --------------------------------------------------------
-    # IMAGE
+    # IMAGE UPLOAD
     # --------------------------------------------------------
 
-    st.subheader("🖼️ Upload Image")
+    st.subheader("🖼️ Reference Image")
 
     uploaded_files = st.file_uploader(
         "Upload image",
@@ -607,11 +528,11 @@ with st.sidebar:
     if uploaded_files:
 
         st.success(
-            f"✅ {len(uploaded_files)} image(s) uploaded"
+            f"✅ {len(uploaded_files)} image(s)"
         )
 
         for i, file in enumerate(
-            uploaded_files[:3]
+            uploaded_files[:6]
         ):
 
             st.image(
@@ -645,18 +566,7 @@ with st.sidebar:
     st.divider()
 
     # --------------------------------------------------------
-    # REFERENCE
-    # --------------------------------------------------------
-
-    preserve_reference = st.checkbox(
-        "🎯 Preserve reference design",
-        value=True
-    )
-
-    st.divider()
-
-    # --------------------------------------------------------
-    # CLEAR
+    # CLEAR CHAT
     # --------------------------------------------------------
 
     if st.button(
@@ -666,39 +576,42 @@ with st.sidebar:
 
         st.session_state.messages = []
 
-        st.session_state.qwen_history = []
-
         st.rerun()
 
 
 # ============================================================
-# MODE DESCRIPTION
+# MODE INFO
 # ============================================================
 
 if mode == "AI Chat":
 
     st.info(
-        "💬 Normal AI conversation — ask questions, "
-        "write prompts, SEO, coding, ideas, stories, etc."
+        "💬 GPT Chat — normal conversation, coding, "
+        "writing, SEO, ideas, prompts and more."
     )
 
 elif mode == "Image Understanding":
 
     st.info(
-        "👁️ Upload an image and ask Qwen to describe "
-        "or analyze it."
+        "👁️ Upload an image and ask GPT to analyze it."
+    )
+
+elif mode == "Image Generation":
+
+    st.info(
+        "🎨 Create a completely new image from your prompt."
     )
 
 else:
 
     st.info(
-        "🎨 Upload a reference image and tell the AI "
+        "🎯 Upload a reference image and tell GPT exactly "
         "what you want changed."
     )
 
 
 # ============================================================
-# DISPLAY OLD CHAT
+# DISPLAY CHAT HISTORY
 # ============================================================
 
 for message in st.session_state.messages:
@@ -711,9 +624,7 @@ for message in st.session_state.messages:
             message["content"]
         )
 
-        if message.get(
-            "image"
-        ) is not None:
+        if message.get("image"):
 
             st.image(
                 message["image"],
@@ -731,7 +642,7 @@ user_prompt = st.chat_input(
 
 
 # ============================================================
-# USER MESSAGE
+# PROCESS USER MESSAGE
 # ============================================================
 
 if user_prompt:
@@ -762,143 +673,20 @@ if user_prompt:
         "assistant"
     ):
 
-        # ====================================================
-        # REFERENCE IMAGE EDIT
-        # ====================================================
+        try:
 
-        if mode == "Reference Image Edit":
+            # ==================================================
+            # NORMAL CHAT
+            # ==================================================
 
-            if not uploaded_files:
-
-                st.error(
-                    "🖼️ Pehle reference image upload karo."
-                )
-
-                st.stop()
-
-            try:
+            if mode == "AI Chat":
 
                 with st.spinner(
-                    "🎨 Qwen reference image ko process kar raha hai..."
+                    "🤖 GPT is thinking..."
                 ):
 
-                    final_prompt = build_edit_prompt(
-                        user_prompt,
-                        aspect_ratio
-                    )
-
-                    generated_image = qwen_image_edit(
-                        uploaded_files[0],
-                        final_prompt
-                    )
-
-                st.success(
-                    "✅ Image ready!"
-                )
-
-                st.image(
-                    generated_image,
-                    use_container_width=True
-                )
-
-                st.download_button(
-                    "⬇️ Download Image",
-                    data=image_bytes(
-                        generated_image
-                    ),
-                    file_name=
-                        "miswars_creators.png",
-                    mime="image/png",
-                    use_container_width=True
-                )
-
-                answer = (
-                    "✨ **Image Generated Successfully**\n\n"
-                    f"**Aspect Ratio:** `{aspect_ratio}`\n\n"
-                    "Reference image was used as the primary "
-                    "visual reference."
-                )
-
-                st.markdown(
-                    answer
-                )
-
-                st.session_state.messages.append(
-                    {
-                        "role":
-                            "assistant",
-
-                        "content":
-                            answer,
-
-                        "image":
-                            generated_image
-                    }
-                )
-
-            except Exception as e:
-
-                st.error(
-                    "❌ Image generation failed."
-                )
-
-                st.warning(
-                    "Qwen's free ZeroGPU Space may be busy "
-                    "or temporarily unavailable."
-                )
-
-                st.code(
-                    str(e)
-                )
-
-        # ====================================================
-        # CHAT / IMAGE UNDERSTANDING
-        # ====================================================
-
-        else:
-
-            image_for_chat = None
-
-            if (
-                mode == "Image Understanding"
-                and uploaded_files
-            ):
-
-                image_for_chat = (
-                    uploaded_files[0]
-                )
-
-            try:
-
-                with st.spinner(
-                    "🤖 Qwen soch raha hai..."
-                ):
-
-                    if mode == "Image Understanding":
-
-                        if image_for_chat:
-
-                            chat_prompt = (
-                                "Carefully analyze the uploaded image. "
-                                "Describe what you see accurately. "
-                                "Pay attention to clothing, colors, "
-                                "people, objects, background, pose, "
-                                "composition and important visual details. "
-                                "Then answer the user's request:\n\n"
-                                + user_prompt
-                            )
-
-                        else:
-
-                            chat_prompt = user_prompt
-
-                    else:
-
-                        chat_prompt = user_prompt
-
-                    answer = qwen_chat(
-                        chat_prompt,
-                        image_for_chat
+                    answer = ask_openai(
+                        user_prompt
                     )
 
                 st.markdown(
@@ -915,17 +703,204 @@ if user_prompt:
                     }
                 )
 
-            except Exception as e:
 
-                st.error(
-                    "❌ Qwen chat temporarily unavailable."
+            # ==================================================
+            # IMAGE UNDERSTANDING
+            # ==================================================
+
+            elif mode == "Image Understanding":
+
+                if not uploaded_files:
+
+                    st.warning(
+                        "🖼️ Please upload an image first."
+                    )
+
+                    st.stop()
+
+                with st.spinner(
+                    "👁️ GPT is analyzing the image..."
+                ):
+
+                    answer = ask_openai(
+                        user_prompt,
+                        uploaded_files[0]
+                    )
+
+                st.markdown(
+                    answer
                 )
+
+                st.session_state.messages.append(
+                    {
+                        "role":
+                            "assistant",
+
+                        "content":
+                            answer
+                    }
+                )
+
+
+            # ==================================================
+            # IMAGE GENERATION
+            # ==================================================
+
+            elif mode == "Image Generation":
+
+                with st.spinner(
+                    "🎨 GPT Image is creating your image..."
+                ):
+
+                    generated = generate_image(
+                        user_prompt,
+                        aspect_ratio
+                    )
+
+                st.success(
+                    "✅ Image generated!"
+                )
+
+                st.image(
+                    generated,
+                    use_container_width=True
+                )
+
+                st.download_button(
+                    "⬇️ Download Image",
+                    data=image_to_bytes(
+                        generated
+                    ),
+                    file_name=
+                        "miswars_creators_ai.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+
+                answer = (
+                    "✨ **Image Generated Successfully!**\n\n"
+                    f"**Ratio:** `{aspect_ratio}`"
+                )
+
+                st.markdown(
+                    answer
+                )
+
+                st.session_state.messages.append(
+                    {
+                        "role":
+                            "assistant",
+
+                        "content":
+                            answer,
+
+                        "image":
+                            generated
+                    }
+                )
+
+
+            # ==================================================
+            # REFERENCE IMAGE EDIT
+            # ==================================================
+
+            elif mode == "Reference Image Edit":
+
+                if not uploaded_files:
+
+                    st.warning(
+                        "🖼️ Please upload a reference image first."
+                    )
+
+                    st.stop()
+
+                with st.spinner(
+                    "🎨 GPT Image is editing your reference..."
+                ):
+
+                    edited = edit_image(
+                        uploaded_files[0],
+                        user_prompt,
+                        aspect_ratio
+                    )
+
+                st.success(
+                    "✅ Reference image edited!"
+                )
+
+                st.image(
+                    edited,
+                    use_container_width=True
+                )
+
+                st.download_button(
+                    "⬇️ Download Edited Image",
+                    data=image_to_bytes(
+                        edited
+                    ),
+                    file_name=
+                        "miswars_creators_edited.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+
+                answer = (
+                    "✨ **Reference Image Edited Successfully!**\n\n"
+                    f"**Ratio:** `{aspect_ratio}`"
+                )
+
+                st.markdown(
+                    answer
+                )
+
+                st.session_state.messages.append(
+                    {
+                        "role":
+                            "assistant",
+
+                        "content":
+                            answer,
+
+                        "image":
+                            edited
+                    }
+                )
+
+
+        except Exception as e:
+
+            st.error(
+                "❌ OpenAI request failed."
+            )
+
+            error_text = str(e)
+
+            if (
+                "api_key" in error_text.lower()
+                or "authentication" in error_text.lower()
+                or "401" in error_text
+            ):
 
                 st.warning(
-                    "The public Qwen Space may be busy, "
-                    "sleeping, or rate-limited."
+                    "🔑 OpenAI API key missing or invalid."
                 )
 
-                st.code(
-                    str(e)
+            elif (
+                "quota" in error_text.lower()
+                or "billing" in error_text.lower()
+            ):
+
+                st.warning(
+                    "💳 OpenAI API billing/quota issue. "
+                    "Check your API account."
                 )
+
+            else:
+
+                st.warning(
+                    "Please check the error below."
+                )
+
+            st.code(
+                error_text
+            )
