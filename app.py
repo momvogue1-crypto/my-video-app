@@ -1,8 +1,10 @@
 import streamlit as st
-from google import genai
+import requests
+import base64
 from PIL import Image
+import io
 
-# 1. Page Configuration & Theme
+# 1. Page Configuration
 st.set_page_config(
     page_title="Miswar's Creators AI",
     page_icon="🤖",
@@ -21,10 +23,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# App Title
 st.markdown('<div class="main-title">Miswar\'s Creators AI 🤖</div>', unsafe_allow_html=True)
 
-# 2. Sidebar Controls
+# 2. Sidebar Setup
 with st.sidebar:
     st.title("⚙️ Settings")
     api_key = st.text_input("🔑 Enter Gemini API Key:", type="password")
@@ -48,44 +49,71 @@ if "messages" not in st.session_state:
         {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main Google Gemini AI se powered hoon. Kuch bhi pochhein!"}
     ]
 
-# Display Existing Chat
+# Display Existing Messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        st.write(message["content"])
 
-# 4. User Interaction & Response Logic
+# Function to call Gemini REST API directly
+def call_gemini_api(api_key, prompt, image_file=None):
+    # Standard endpoints list to try automatically
+    models_to_try = [
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-pro"
+    ]
+    
+    parts = []
+    
+    # If image is attached, convert to Base64
+    if image_file:
+        image_bytes = image_file.getvalue()
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        mime_type = image_file.type
+        parts.append({
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": base64_image
+            }
+        })
+    
+    parts.append({"text": prompt})
+    payload = {"contents": [{"parts": parts}]}
+    
+    last_error = ""
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        try:
+            res = requests.post(url, json=payload, timeout=30)
+            data = res.json()
+            
+            if res.status_code == 200 and "candidates" in data:
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            elif "error" in data:
+                last_error = data["error"].get("message", "Unknown error")
+                if "429" in str(res.status_code) or "RESOURCE_EXHAUSTED" in last_error:
+                    return "⏳ **Rate Limit Hit**: Google API per free quota complete ho gaya hai. Please 30 seconds wait karke try karein ya naye Google account se API Key banayein."
+        except Exception as e:
+            last_error = str(e)
+            
+    return f"⚠️ Error: {last_error}"
+
+# 4. User Chat Input Logic
 if user_prompt := st.chat_input("Ask Gemini anything..."):
     if not api_key:
         st.error("⚠️ Pehle Sidebar mein apni Gemini API Key enter karein!")
     else:
         st.session_state.messages.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
-            st.markdown(user_prompt)
+            st.write(user_prompt)
 
         with st.chat_message("assistant"):
             with st.spinner("Miswar's AI is thinking..."):
-                try:
-                    client = genai.Client(api_key=api_key)
-                    
-                    # Using gemini-1.5-flash for free tier stability
-                    if uploaded_file:
-                        img = Image.open(uploaded_file)
-                        response = client.models.generate_content(
-                            model='gemini-1.5-flash',
-                            contents=[user_prompt, img]
-                        )
-                    else:
-                        response = client.models.generate_content(
-                            model='gemini-1.5-flash',
-                            contents=user_prompt
-                        )
-
-                    st.markdown(response.text)
-                    st.session_state.messages.append({"role": "assistant", "content": response.text})
-
-                except Exception as e:
-                    err_msg = str(e)
-                    if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                        st.error("⏳ Google API Limit Hit ho gayi hai! 30-40 seconds ruk kar dobara try karein ya Google AI Studio se NAYI API KEY banayein.")
-                    else:
-                        st.error(f"Error: {err_msg}")
+                response_text = call_gemini_api(api_key, user_prompt, uploaded_file)
+                st.write(response_text)
+                
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": response_text
+                })
