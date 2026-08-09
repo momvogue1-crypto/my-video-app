@@ -1,57 +1,99 @@
 import streamlit as st
-import google.generativeai as genai
+from google import genai
+from PIL import Image
 
-# Page Setup
-st.set_page_config(page_title="Miswar's Creators AI", page_icon="🤖", layout="wide")
+# 1. Page Configuration & Theme
+st.set_page_config(
+    page_title="Miswar's Creators AI",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-st.title("Miswar's Creators AI")
+# Custom Styling (Clean UI)
+st.markdown("""
+<style>
+    .stApp { background-color: #ffffff !important; color: #111111 !important; }
+    p, span, label, h1, h2, h3, h4, h5, h6 { color: #111111 !important; }
+    section[data-testid="stSidebar"] { background-color: #f7f7f8 !important; border-right: 1px solid #e5e5e5; }
+    .main-title { font-size: 2.5rem; font-weight: 800; text-align: center; color: #000000 !important; margin-bottom: 20px; }
+    div[data-testid="stChatInput"] { border-radius: 20px; border: 1px solid #ccc; }
+</style>
+""", unsafe_allow_html=True)
 
-# Sidebar
+# App Title
+st.markdown('<div class="main-title">Miswar\'s Creators AI 🤖</div>', unsafe_allow_html=True)
+
+# 2. Sidebar Controls
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.title("⚙️ Settings")
     api_key = st.text_input("🔑 Enter Gemini API Key:", type="password")
-    if st.button("Clear Chat"):
+    
+    st.divider()
+    st.subheader("🖼️ Upload Image (Optional)")
+    uploaded_file = st.file_uploader("Image ke bare mein poochne ke liye:", type=["jpg", "jpeg", "png"])
+    
+    if uploaded_file:
+        img = Image.open(uploaded_file)
+        st.image(img, caption="Attached Image", use_container_width=True)
+    
+    st.divider()
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# State setup
+# 3. Chat Session Initialization
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main Google Gemini AI se powered hoon. Kuch bhi pochhein!"}
+    ]
 
-# Render chat history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+# Display Existing Chat
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-# Chat Input
-if prompt := st.chat_input("Ask something..."):
+# 4. User Interaction & Response Logic
+if user_prompt := st.chat_input("Ask Gemini anything..."):
     if not api_key:
-        st.error("Pehle sidebar mein API Key daalein!")
+        st.error("⚠️ Pehle Sidebar mein apni Gemini API Key enter karein!")
     else:
-        # User message
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        # User input display
+        st.session_state.messages.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
-            st.write(prompt)
+            st.markdown(user_prompt)
 
-        # Assistant response
+        # Assistant response logic
         with st.chat_message("assistant"):
-            try:
-                genai.configure(api_key=api_key)
-                
-                # Direct simple call using base model
-                model = genai.GenerativeModel("gemini-1.5-flash-latest")
-                
-                # Text generation with direct stream to avoid freezing
-                response = model.generate_content(prompt, stream=True)
-                
-                def stream_gen():
-                    for chunk in response:
-                        if chunk.text:
-                            yield chunk.text
+            with st.spinner("Miswar's AI is thinking..."):
+                try:
+                    # Direct client call with new SDK
+                    client = genai.Client(api_key=api_key)
+                    
+                    if uploaded_file:
+                        img = Image.open(uploaded_file)
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=[user_prompt, img]
+                        )
+                    else:
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=user_prompt
+                        )
 
-                full_text = st.write_stream(stream_gen())
-                
-                st.session_state.messages.append({"role": "assistant", "content": full_text})
-                
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
+                    st.markdown(response.text)
+                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+
+                except Exception as e:
+                    # Fallback to standard fast model if 2.5 is unavailable
+                    try:
+                        client = genai.Client(api_key=api_key)
+                        response = client.models.generate_content(
+                            model='gemini-2.0-flash',
+                            contents=user_prompt
+                        )
+                        st.markdown(response.text)
+                        st.session_state.messages.append({"role": "assistant", "content": response.text})
+                    except Exception as err:
+                        st.error(f"Error: {err}")
