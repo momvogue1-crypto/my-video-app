@@ -1,75 +1,77 @@
 import streamlit as st
 import urllib.parse
-import requests
+from PIL import Image
 
-# Page Configuration - Miswar's Creators VIP Theme
+# Page Configuration - Miswar's Creators Light Clean Theme
 st.set_page_config(
-    page_title="Miswar's Creators - AI Studio",
+    page_title="Miswar's Creators",
     page_icon="🎨",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling to mimic ChatGPT Dark Mode with VIP Classy Aesthetics
+# Custom Styling for Clean White & Black Contrast
 st.markdown("""
 <style>
-    /* Main Background */
+    /* Main Background & Text Color */
     .stApp {
-        background-color: #212121;
-        color: #ececec;
+        background-color: #ffffff !important;
+        color: #111111 !important;
+    }
+    
+    /* Global text contrast fix */
+    p, span, label, h1, h2, h3, h4, h5, h6 {
+        color: #111111 !important;
     }
     
     /* Sidebar Styling */
     section[data-testid="stSidebar"] {
-        background-color: #171717 !important;
-        border-right: 1px solid rgba(255, 255, 255, 0.1);
+        background-color: #f7f7f8 !important;
+        border-right: 1px solid #e5e5e5;
     }
     
     /* Header Area */
     .chatgpt-header {
         text-align: center;
-        padding: 15px 0 5px 0;
-        margin-bottom: 20px;
+        padding: 10px 0 20px 0;
+        margin-bottom: 10px;
+        border-bottom: 1px solid #eaeaea;
     }
     .main-title {
         font-size: 2.8rem;
         font-weight: 800;
-        background: linear-gradient(90deg, #38bdf8, #818cf8, #c084fc);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        letter-spacing: 1px;
+        color: #000000 !important;
+        letter-spacing: -0.5px;
     }
-    .owner-tag {
-        font-family: 'Georgia', serif;
-        font-style: italic;
-        color: #9b9b9b;
-        font-size: 1.2rem;
-        margin-top: -5px;
-    }
-    .owner-name {
-        font-weight: bold;
-        color: #e2e8f0;
-        letter-spacing: 0.5px;
-    }
-    
-    /* Input Box styling like ChatGPT */
+
+    /* Input Box styling */
     div[data-testid="stChatInput"] {
         border-radius: 20px;
+        border: 1px solid #ccc;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Main Header - Branding & Signature
+# Main Header
 st.markdown("""
 <div class="chatgpt-header">
     <div class="main-title">Miswar's Creators</div>
-    <div class="owner-tag">Designed by <span class="owner-name">Miswar Ilyas</span> (Classy Owner)</div>
 </div>
 """, unsafe_allow_html=True)
 
 # Sidebar Options
 with st.sidebar:
     st.title("⚙️ Studio Controls")
+    
+    # Image Input Option (Image to Image / Image Reference)
+    st.subheader("🖼️ Image Input (Optional)")
+    uploaded_file = st.file_uploader("Upload reference image:", type=["jpg", "jpeg", "png"])
+    
+    if uploaded_file:
+        st.image(uploaded_file, caption="Uploaded Reference Image", use_container_width=True)
+        st.success("✅ Reference Image Attached!")
+    
+    st.divider()
     
     # Aspect Ratio Functionality
     aspect_ratio_label = st.selectbox(
@@ -98,18 +100,18 @@ with st.sidebar:
 # Initialize Chat Memory
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Main aapka AI Image Creator hoon. ChatGPT ki tarah apna koi bhi idea likhein, main Ultra HD image generate kar dunga!"}
+        {"role": "assistant", "content": "Welcome to **Miswar's Creators**! Apna scene/prompt likhein ya sidebar se image upload karke modifications bataayein."}
     ]
 
-# Display Existing Chat Messages (ChatGPT Style)
+# Display Existing Chat Messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if "img_url" in message:
             st.image(message["img_url"], use_container_width=True)
 
-# ChatGPT-style Chat Input Bar at Bottom
-if user_prompt := st.chat_input("Ask Miswar's Creators to create an image..."):
+# Chat Input Bar
+if user_prompt := st.chat_input("Ask Miswar's Creators to generate or modify an image..."):
     # Append user prompt
     st.session_state.messages.append({"role": "user", "content": user_prompt})
     with st.chat_message("user"):
@@ -118,7 +120,13 @@ if user_prompt := st.chat_input("Ask Miswar's Creators to create an image..."):
     # Generate Image Response
     with st.chat_message("assistant"):
         with st.spinner("Miswar's Creators Engine is generating your Ultra HD image..."):
-            encoded_prompt = urllib.parse.quote(user_prompt)
+            
+            # Combine image reference flag in prompt if image uploaded
+            final_prompt = user_prompt
+            if uploaded_file:
+                final_prompt = f"Based on reference style, {user_prompt}"
+            
+            encoded_prompt = urllib.parse.quote(final_prompt)
             image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&nologo=true&seed=42"
             
             response_text = f"✨ **Here is your Ultra HD Image!**\n\n**Ratio:** `{aspect_ratio_label}`"
